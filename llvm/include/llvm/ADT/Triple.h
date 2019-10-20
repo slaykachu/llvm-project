@@ -99,7 +99,9 @@ public:
     renderscript32, // 32-bit RenderScript
     renderscript64, // 64-bit RenderScript
     ve,             // NEC SX-Aurora Vector Engine
-    LastArchType = ve
+    z80,            // Z80
+    ez80,           // eZ80
+    LastArchType = ez80
   };
   enum SubArchType {
     NoSubArch,
@@ -760,6 +762,11 @@ public:
   // Tests whether the target is CSKY
   bool isCSKY() const {
     return getArch() == Triple::csky;
+  }
+
+  /// Tests whether the target is (e)z80.
+  bool isZ80() const {
+    return getArch() == Triple::z80 || getArch() == Triple::ez80;
   }
 
   /// Tests whether the target supports comdat
