@@ -95,7 +95,7 @@ bool CallLowering::lowerCall(MachineIRBuilder &MIRBuilder, const CallBase &CB,
   unsigned i = 0;
   unsigned NumFixedArgs = CB.getFunctionType()->getNumParams();
   for (auto &Arg : CB.args()) {
-    ArgInfo OrigArg{ArgRegs[i], Arg->getType(), getAttributesForArgIdx(CB, i),
+    ArgInfo OrigArg{ArgRegs[i], Arg, getAttributesForArgIdx(CB, i),
                     i < NumFixedArgs};
     setArgFlags(OrigArg, i + AttributeList::FirstArgIndex, DL, CB);
 
@@ -116,7 +116,7 @@ bool CallLowering::lowerCall(MachineIRBuilder &MIRBuilder, const CallBase &CB,
   else
     Info.Callee = MachineOperand::CreateReg(GetCalleeReg(), false);
 
-  Info.OrigRet = ArgInfo{ResRegs, CB.getType(), ISD::ArgFlagsTy{}};
+  Info.OrigRet = ArgInfo{ResRegs, &CB};
   if (!Info.OrigRet.Ty->isVoidTy())
     setArgFlags(Info.OrigRet, AttributeList::ReturnIndex, DL, CB);
 
@@ -234,114 +234,93 @@ bool CallLowering::handleAssignments(CCState &CCInfo,
                           CCValAssign::Full, Args[i], Args[i].Flags[0],
                           CCInfo)) {
       MVT NewVT = TLI->getRegisterTypeForCallingConv(
-          F.getContext(), CCInfo.getCallingConv(), EVT(CurVT));
+          F.getContext(), CCInfo.getCallingConv(), CurVT);
 
       // If we need to split the type over multiple regs, check it's a scenario
       // we currently support.
       unsigned NumParts = TLI->getNumRegistersForCallingConv(
           F.getContext(), CCInfo.getCallingConv(), CurVT);
-      if (NumParts > 1) {
-        // For now only handle exact splits.
-        if (NewVT.getSizeInBits() * NumParts != CurVT.getSizeInBits())
-          return false;
-      }
+      assert(NumParts && "NumParts should not be 0");
+      bool Exact = NewVT.getSizeInBits() * NumParts == CurVT.getSizeInBits();
 
-    MVT NewVT = TLI->getRegisterTypeForCallingConv(
-        F.getContext(), F.getCallingConv(), EVT(CurVT));
-
-    // If we need to split the type over multiple regs, check it's a scenario
-    // we currently support.
-    unsigned NumParts = TLI->getNumRegistersForCallingConv(
-        F.getContext(), F.getCallingConv(), CurVT);
-    if (NumParts > 1) {
-      // For now only handle exact splits.
-      if (NewVT.getSizeInBits() * NumParts != CurVT.getSizeInBits())
-        return false;
-    }
-
-    // For incoming arguments (physregs to vregs), we could have values in
-    // physregs (or memlocs) which we want to extract and copy to vregs.
-    // During this, we might have to deal with the LLT being split across
-    // multiple regs, so we have to record this information for later.
-    //
-    // If we have outgoing args, then we have the opposite case. We have a
-    // vreg with an LLT which we want to assign to a physical location, and
-    // we might have to record that the value has to be split later.
-    if (Handler.isIncomingArgumentHandler()) {
       if (NumParts == 1) {
         // Try to use the register type if we couldn't assign the VT.
         if (Handler.assignArg(i, NewVT, NewVT, CCValAssign::Full, Args[i],
                               Args[i].Flags[0], CCInfo))
           return false;
-      } else {
-        // We're handling an incoming arg which is split over multiple regs.
-        // E.g. passing an s128 on AArch64.
-        ISD::ArgFlagsTy OrigFlags = Args[i].Flags[0];
-        Args[i].OrigRegs.push_back(Args[i].Regs[0]);
-        Args[i].Regs.clear();
-        Args[i].Flags.clear();
-        LLT NewLLT = getLLTForMVT(NewVT);
-        // For each split register, create and assign a vreg that will store
-        // the incoming component of the larger value. These will later be
-        // merged to form the final vreg.
-        for (unsigned Part = 0; Part < NumParts; ++Part) {
-          Register Reg =
-              MIRBuilder.getMRI()->createGenericVirtualRegister(NewLLT);
-          ISD::ArgFlagsTy Flags = OrigFlags;
-          if (Part == 0) {
-            Flags.setSplit();
-          } else {
-            Flags.setOrigAlign(Align(1));
-            if (Part == NumParts - 1)
-              Flags.setSplitEnd();
-          }
-          Args[i].Regs.push_back(Reg);
-          Args[i].Flags.push_back(Flags);
-          if (Handler.assignArg(i + Part, NewVT, NewVT, CCValAssign::Full,
-                                Args[i], Args[i].Flags[Part], CCInfo)) {
-            // Still couldn't assign this smaller part type for some reason.
-            return false;
-          }
-        }
+        continue;
       }
-    } else {
-      // Handling an outgoing arg that might need to be split.
-      if (NumParts < 2)
-        return false; // Don't know how to deal with this type combination.
 
-      // This type is passed via multiple registers in the calling convention.
-      // We need to extract the individual parts.
-      Register LargeReg = Args[i].Regs[0];
-      LLT SmallTy = LLT::scalar(NewVT.getSizeInBits());
-      auto Unmerge = MIRBuilder.buildUnmerge(SmallTy, LargeReg);
-      assert(Unmerge->getNumOperands() == NumParts + 1);
+      // For incoming arguments (physregs to vregs), we could have values in
+      // physregs (or memlocs) which we want to extract and copy to vregs.
+      // During this, we might have to deal with the LLT being split across
+      // multiple regs, so we have to record this information for later.
+      //
+      // If we have outgoing args, then we have the opposite case. We have a
+      // vreg with an LLT which we want to assign to a physical location, and
+      // we might have to record that the value has to be split later.
+      // If we're handling an incoming arg which is split over multiple regs.
+      // E.g. passing an s128 on AArch64.
+      // Otherwise, this type is passed via multiple registers in the calling
+      // convention. We need to extract the individual parts.
       ISD::ArgFlagsTy OrigFlags = Args[i].Flags[0];
+      Args[i].OrigRegs.push_back(Args[i].Regs[0]);
       // We're going to replace the regs and flags with the split ones.
       Args[i].Regs.clear();
       Args[i].Flags.clear();
-      for (unsigned PartIdx = 0; PartIdx < NumParts; ++PartIdx) {
+      LLT NewLLT = getLLTForMVT(NewVT);
+      // For each split register, create and assign a vreg that will store
+      // the incoming component of the larger value. These will later be
+      // merged to form the final vreg.
+      for (unsigned Part = 0; Part < NumParts; ++Part) {
+        MVT PartVT = NewVT;
+        LLT PartLLT = NewLLT;
         ISD::ArgFlagsTy Flags = OrigFlags;
-        if (PartIdx == 0) {
+        if (Part == 0) {
           Flags.setSplit();
         } else {
           Flags.setOrigAlign(Align(1));
-          if (PartIdx == NumParts - 1)
+          if (Part == NumParts - 1) {
             Flags.setSplitEnd();
+            if (!Exact) {
+              unsigned LeftoverSize =
+                  CurVT.getSizeInBits() - NewVT.getSizeInBits() * Part;
+              EVT LeftoverVT = EVT::getIntegerVT(F.getContext(), LeftoverSize);
+              PartVT = TLI->getRegisterTypeForCallingConv(
+                  F.getContext(), CCInfo.getCallingConv(), LeftoverVT);
+              PartLLT = getLLTForMVT(PartVT);
+            }
+          }
         }
-        Args[i].Regs.push_back(Unmerge.getReg(PartIdx));
+        Args[i].Regs.push_back(
+            MIRBuilder.getMRI()->createGenericVirtualRegister(PartLLT));
         Args[i].Flags.push_back(Flags);
-        if (Handler.assignArg(i + PartIdx, NewVT, NewVT, CCValAssign::Full,
-                              Args[i], Args[i].Flags[PartIdx], CCInfo))
+        if (Handler.assignArg(i + Part, PartVT, PartVT, CCValAssign::Full,
+                              Args[i], Args[i].Flags[Part], CCInfo))
+          // Still couldn't assign this smaller part type for some reason.
           return false;
       }
+      if (Handler.isIncomingArgumentHandler())
+        continue;
+
+      if (Exact)
+        MIRBuilder.buildUnmerge(Args[i].Regs, Args[i].OrigRegs[0]);
+      else
+        for (unsigned Part = 0, Offset = 0; Part < NumParts;
+             ++Part, Offset += NewVT.getSizeInBits())
+          MIRBuilder.buildExtract(Args[i].Regs[Part], Args[i].OrigRegs[0],
+                                  Offset);
     }
   }
 
-  for (unsigned i = 0, e = Args.size(), j = 0; i != e; ++i, ++j) {
+  int64_t IndirectOffset = 0;
+  for (unsigned i = 0, e = Args.size(), j = 0; i != e; ++i) {
     assert(j < ArgLocs.size() && "Skipped too many arg locs");
 
     CCValAssign &VA = ArgLocs[j];
     assert(VA.getValNo() == i && "Location doesn't correspond to current arg");
+    if (!Handler.prepareArg(VA))
+      return false;
 
     if (VA.needsCustom()) {
       unsigned NumArgRegs =
@@ -355,9 +334,40 @@ bool CallLowering::handleAssignments(CCState &CCInfo,
     // FIXME: Pack registers if we have more than one.
     Register ArgReg = Args[i].Regs[0];
 
-    EVT OrigVT = EVT::getEVT(Args[i].Ty);
-    EVT VAVT = VA.getValVT();
+    MVT VAVT = VA.getValVT();
     const LLT OrigTy = getLLTForType(*Args[i].Ty, DL);
+
+    if (VA.getLocInfo() == CCValAssign::Indirect) {
+      if (Args[i].Regs.size() > 1) {
+        LLVM_DEBUG(dbgs() << "Load/store a split arg to/from an indirect "
+                             "pointer not implemented yet\n");
+        return false;
+      }
+      assert(Args[i].OrigRegs.empty() && "Don't handle split yet");
+      Args[i].OrigRegs.push_back(ArgReg);
+      LLT p0 = LLT::pointer(0, DL.getPointerSizeInBits(0));
+      IndirectOffset = 0;
+      if (Handler.isIncomingArgumentHandler())
+        ArgReg = MIRBuilder.getMRI()->createGenericVirtualRegister(p0);
+      else {
+        MachineFrameInfo &MFI = MF.getFrameInfo();
+        unsigned Size = VAVT.getStoreSize();
+        int FI =
+            MFI.CreateStackObject(Size, DL.getPrefTypeAlign(Args[i].Ty), false);
+        auto StackSlot = MIRBuilder.buildFrameIndex(p0, FI);
+        LLT sIndex = LLT::scalar(DL.getIndexSizeInBits(0));
+        ArgReg = {};
+        MIRBuilder.materializePtrAdd(ArgReg, StackSlot.getReg(0), sIndex,
+                                     IndirectOffset);
+        MachinePointerInfo MPO = MachinePointerInfo::getFixedStack(MF, FI);
+        CCValAssign IndirectVA = CCValAssign::getMem(i, VAVT, IndirectOffset,
+                                                     VAVT, CCValAssign::Full);
+        Handler.assignValueToAddress(Args[i].OrigRegs[0], ArgReg, Size, MPO,
+                                     IndirectVA);
+        IndirectOffset += Size;
+      }
+      Args[i].Regs[0] = ArgReg;
+    }
 
     // Expected to be multiple regs for a single incoming arg.
     // There should be Regs.size() ArgLocs per argument.
@@ -365,82 +375,115 @@ bool CallLowering::handleAssignments(CCState &CCInfo,
 
     assert((j + (NumArgRegs - 1)) < ArgLocs.size() &&
            "Too many regs for number of args");
-    for (unsigned Part = 0; Part < NumArgRegs; ++Part) {
-      // There should be Regs.size() ArgLocs per argument.
-      VA = ArgLocs[j + Part];
-      if (VA.isMemLoc()) {
-        // Don't currently support loading/storing a type that needs to be split
-        // to the stack. Should be easy, just not implemented yet.
-        if (NumArgRegs > 1) {
-          LLVM_DEBUG(
-            dbgs()
-            << "Load/store a split arg to/from the stack not implemented yet\n");
-          return false;
+    if (VA.isRegLoc()) {
+      if (Handler.isIncomingArgumentHandler()) {
+        if (VAVT.getSizeInBits() <= OrigTy.getSizeInBits()) {
+          for (unsigned Part = 0; Part < NumArgRegs; ++Part) {
+            // There should be Regs.size() ArgLocs per argument.
+            VA = ArgLocs[j + Part];
+            Handler.assignValueToReg(Args[i].Regs[Part], VA.getLocReg(), VA);
+          }
+        } else {
+          const LLT VATy(VAVT);
+          Register NewReg =
+              MIRBuilder.getMRI()->createGenericVirtualRegister(VATy);
+          Handler.assignValueToReg(NewReg, VA.getLocReg(), VA);
+          // If it's a vector type, we either need to truncate the elements
+          // or do an unmerge to get the lower block of elements.
+          if (VATy.isVector() &&
+              VATy.getNumElements() > OrigTy.getNumElements()) {
+            // Just handle the case where the VA type is 2 * original type.
+            if (VATy.getNumElements() != OrigTy.getNumElements() * 2) {
+              LLVM_DEBUG(dbgs()
+                         << "Incoming promoted vector arg has too many elts");
+              return false;
+            }
+            auto Unmerge = MIRBuilder.buildUnmerge({OrigTy, OrigTy}, {NewReg});
+            MIRBuilder.buildCopy(ArgReg, Unmerge.getReg(0));
+          } else {
+            MIRBuilder.buildTrunc(ArgReg, {NewReg}).getReg(0);
+          }
         }
-
-        // FIXME: Use correct address space for pointer size
-        EVT LocVT = VA.getValVT();
-        unsigned MemSize = LocVT == MVT::iPTR ? DL.getPointerSize()
-                                              : LocVT.getStoreSize();
+      } else {
+        // This is an outgoing argument that might have been split.
+        for (unsigned Part = 0; Part < NumArgRegs; ++Part) {
+          // There should be Regs.size() ArgLocs per argument.
+          VA = ArgLocs[j + Part];
+          Handler.assignValueToReg(Args[i].Regs[Part], VA.getLocReg(), VA);
+        }
+      }
+    } else {
+      assert(VA.isMemLoc());
+      for (unsigned Part = 0; Part < NumArgRegs; ++Part) {
+        VA = ArgLocs[j + Part];
+        unsigned Size;
+        ISD::ArgFlagsTy OrigFlags = Args[i].Flags[Part];
+        if (OrigFlags.isByVal())
+          Size = OrigFlags.getByValSize();
+        else
+          Size = DL.getTypeStoreSize(Args[i].Ty);
+        if (!Size)
+          continue;
         unsigned Offset = VA.getLocMemOffset();
         MachinePointerInfo MPO;
-        Register StackAddr = Handler.getStackAddress(MemSize, Offset, MPO);
-        Handler.assignValueToAddress(Args[i], StackAddr,
-                                     MemSize, MPO, VA);
-        continue;
-      }
-
-      assert(VA.isRegLoc() && "custom loc should have been handled already");
-
-      if (OrigVT.getSizeInBits() >= VAVT.getSizeInBits() ||
-          !Handler.isIncomingArgumentHandler()) {
-        // This is an argument that might have been split. There should be
-        // Regs.size() ArgLocs per argument.
-
-        // Insert the argument copies. If VAVT < OrigVT, we'll insert the merge
-        // to the original register after handling all of the parts.
-        Handler.assignValueToReg(Args[i].Regs[Part], VA.getLocReg(), VA);
-        continue;
-      }
-
-      // This ArgLoc covers multiple pieces, so we need to split it.
-      const LLT VATy(VAVT.getSimpleVT());
-      Register NewReg =
-        MIRBuilder.getMRI()->createGenericVirtualRegister(VATy);
-      Handler.assignValueToReg(NewReg, VA.getLocReg(), VA);
-      // If it's a vector type, we either need to truncate the elements
-      // or do an unmerge to get the lower block of elements.
-      if (VATy.isVector() &&
-          VATy.getNumElements() > OrigVT.getVectorNumElements()) {
-        // Just handle the case where the VA type is 2 * original type.
-        if (VATy.getNumElements() != OrigVT.getVectorNumElements() * 2) {
-          LLVM_DEBUG(dbgs()
-                     << "Incoming promoted vector arg has too many elts");
-          return false;
+        Register StackAddr = Handler.getStackAddress(Size, Offset, MPO);
+        if (!OrigFlags.isByVal())
+          Handler.assignValueToAddress(Args[i].Regs[Part], StackAddr, Size, MPO,
+                                       VA);
+        else if (Handler.isIncomingArgumentHandler())
+          MIRBuilder.buildCopy(Args[i].Regs[Part], StackAddr);
+        else {
+          Register SizeReg =
+              MIRBuilder
+                  .buildConstant(LLT::scalar(DL.getIndexSizeInBits(0)), Size)
+                  .getReg(0);
+          MaybeAlign ArgAlign;
+          const Value *ArgVal = Args[i].Val;
+          if (ArgVal)
+            ArgAlign = ArgVal->getPointerAlignment(DL);
+          MIRBuilder
+              .buildIntrinsic(Intrinsic::memcpy, ArrayRef<Register>(),
+                              /*HasSideEffects=*/true)
+              .addUse(StackAddr)
+              .addUse(ArgReg)
+              .addUse(SizeReg)
+              .addImm(/*isTailCall=*/0)
+              .addMemOperand(
+                  MF.getMachineMemOperand(MPO, MachineMemOperand::MOStore, Size,
+                                          OrigFlags.getNonZeroByValAlign()))
+              .addMemOperand(MF.getMachineMemOperand(
+                  MachinePointerInfo(ArgVal), MachineMemOperand::MOLoad, Size,
+                  ArgAlign.valueOrOne()));
         }
-        auto Unmerge = MIRBuilder.buildUnmerge({OrigTy, OrigTy}, {NewReg});
-        MIRBuilder.buildCopy(ArgReg, Unmerge.getReg(0));
-      } else {
-        MIRBuilder.buildTrunc(ArgReg, {NewReg}).getReg(0);
       }
     }
-
-    // Now that all pieces have been handled, re-pack any arguments into any
-    // wider, original registers.
-    if (Handler.isIncomingArgumentHandler()) {
-      if (VAVT.getSizeInBits() < OrigVT.getSizeInBits()) {
-        assert(NumArgRegs >= 2);
-
-        // Merge the split registers into the expected larger result vreg
-        // of the original call.
-        MIRBuilder.buildMerge(Args[i].OrigRegs[0], Args[i].Regs);
-      }
+    if (Handler.isIncomingArgumentHandler() && NumArgRegs > 1) {
+      // Merge the split registers into the expected larger result vreg
+      // of the original call.
+      SmallVector<uint64_t, 4> Offsets;
+      for (unsigned Part = 0; Part < NumArgRegs; ++Part)
+        Offsets.push_back(Part * VAVT.getSizeInBits());
+      MIRBuilder.buildSequence(Args[i].OrigRegs[0], Args[i].Regs, Offsets);
     }
 
-    j += NumArgRegs - 1;
+    if (VA.getLocInfo() == CCValAssign::Indirect &&
+        Handler.isIncomingArgumentHandler()) {
+      Register AddrReg;
+      unsigned Size = VAVT.getStoreSize();
+      LLT sIndex = LLT::scalar(DL.getIndexSizeInBits(0));
+      MIRBuilder.materializePtrAdd(AddrReg, ArgReg, sIndex, IndirectOffset);
+      MachinePointerInfo MPO(Args[i].Val, IndirectOffset);
+      CCValAssign IndirectVA =
+          CCValAssign::getMem(i, VAVT, IndirectOffset, VAVT, CCValAssign::Full);
+      Handler.assignValueToAddress(Args[i].OrigRegs[0], AddrReg, Size, MPO,
+                                   IndirectVA);
+      IndirectOffset += Size;
+    }
+
+    j += Args[i].Regs.size();
   }
 
-  return true;
+  return Handler.finalize(CCInfo);
 }
 
 bool CallLowering::analyzeArgInfo(CCState &CCState,
@@ -536,23 +579,18 @@ Register CallLowering::ValueHandler::extendRegister(Register ValReg,
   default: break;
   case CCValAssign::Full:
   case CCValAssign::BCvt:
+  case CCValAssign::Indirect:
     // FIXME: bitconverting between vector types may or may not be a
     // nop in big-endian situations.
     return ValReg;
-  case CCValAssign::AExt: {
-    auto MIB = MIRBuilder.buildAnyExt(LocTy, ValReg);
-    return MIB.getReg(0);
-  }
-  case CCValAssign::SExt: {
-    Register NewReg = MRI.createGenericVirtualRegister(LocTy);
-    MIRBuilder.buildSExt(NewReg, ValReg);
-    return NewReg;
-  }
-  case CCValAssign::ZExt: {
-    Register NewReg = MRI.createGenericVirtualRegister(LocTy);
-    MIRBuilder.buildZExt(NewReg, ValReg);
-    return NewReg;
-  }
+  case CCValAssign::AExt:
+    return MIRBuilder.buildAnyExt(LocTy, ValReg).getReg(0);
+  case CCValAssign::SExt:
+    return MIRBuilder.buildSExt(LocTy, ValReg).getReg(0);
+  case CCValAssign::ZExt:
+    return MIRBuilder.buildZExt(LocTy, ValReg).getReg(0);
+  case CCValAssign::Trunc:
+    return MIRBuilder.buildTrunc(LocTy, ValReg).getReg(0);
   }
   llvm_unreachable("unable to extend register");
 }
