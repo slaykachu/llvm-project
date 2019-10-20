@@ -140,7 +140,7 @@ LegalizerHelper::legalizeInstrStep(MachineInstr &MI) {
     return moreElementsVector(MI, Step.TypeIdx, Step.NewType);
   case Custom:
     LLVM_DEBUG(dbgs() << ".. Custom legalization\n");
-    return LI.legalizeCustom(MI, MRI, MIRBuilder, Observer, *this);
+    return LI.legalizeCustomMaybeLegal(*this, MI);
   default:
     LLVM_DEBUG(dbgs() << ".. Unable to legalize\n");
     return UnableToLegalize;
@@ -418,17 +418,63 @@ static RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size) {
     }                                                                          \
   } while (0)
 
+#define RTLIBCASE_ALL(LibcallPrefix)                                           \
+  do {                                                                         \
+    switch (Size) {                                                            \
+    case 8:                                                                    \
+      return RTLIB::LibcallPrefix##8;                                          \
+    case 16:                                                                   \
+      return RTLIB::LibcallPrefix##16;                                         \
+    case 24:                                                                   \
+      return RTLIB::LibcallPrefix##24;                                         \
+    case 32:                                                                   \
+      return RTLIB::LibcallPrefix##32;                                         \
+    case 64:                                                                   \
+      return RTLIB::LibcallPrefix##64;                                         \
+    case 128:                                                                  \
+      return RTLIB::LibcallPrefix##128;                                        \
+    default:                                                                   \
+      llvm_unreachable("unexpected size");                                     \
+    }                                                                          \
+  } while (0)
+
   switch (Opcode) {
+  case TargetOpcode::G_ADD:
+    RTLIBCASE_INT(ADD_I);
+  case TargetOpcode::G_SUB:
+    RTLIBCASE_INT(SUB_I);
+  case TargetOpcode::G_AND:
+    RTLIBCASE_ALL(AND_I);
+  case TargetOpcode::G_OR:
+    RTLIBCASE_ALL(OR_I);
+  case TargetOpcode::G_XOR:
+    RTLIBCASE_ALL(XOR_I);
+  case TargetOpcode::G_SHL:
+    RTLIBCASE_ALL(SHL_I);
+  case TargetOpcode::G_LSHR:
+    RTLIBCASE_ALL(SRL_I);
+  case TargetOpcode::G_ASHR:
+    RTLIBCASE_ALL(SRA_I);
+  case TargetOpcode::G_MUL:
+    RTLIBCASE_ALL(MUL_I);
   case TargetOpcode::G_SDIV:
-    RTLIBCASE_INT(SDIV_I);
+    RTLIBCASE_ALL(SDIV_I);
   case TargetOpcode::G_UDIV:
-    RTLIBCASE_INT(UDIV_I);
+    RTLIBCASE_ALL(UDIV_I);
   case TargetOpcode::G_SREM:
-    RTLIBCASE_INT(SREM_I);
+    RTLIBCASE_ALL(SREM_I);
   case TargetOpcode::G_UREM:
-    RTLIBCASE_INT(UREM_I);
+    RTLIBCASE_ALL(UREM_I);
+  case TargetOpcode::G_CTPOP:
+    RTLIBCASE_ALL(POPCNT_I);
+  case TargetOpcode::G_BITREVERSE:
+    RTLIBCASE_ALL(BITREV_I);
   case TargetOpcode::G_CTLZ_ZERO_UNDEF:
     RTLIBCASE_INT(CTLZ_I);
+  case TargetOpcode::G_INTRINSIC_TRUNC:
+    RTLIBCASE(TRUNC_F);
+  case TargetOpcode::G_INTRINSIC_ROUND:
+    RTLIBCASE(ROUND_F);
   case TargetOpcode::G_FADD:
     RTLIBCASE(ADD_F);
   case TargetOpcode::G_FSUB:
@@ -473,6 +519,10 @@ static RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size) {
     RTLIBCASE(NEARBYINT_F);
   case TargetOpcode::G_INTRINSIC_ROUNDEVEN:
     RTLIBCASE(ROUNDEVEN_F);
+  case TargetOpcode::G_FNEG:
+    RTLIBCASE(NEG_F);
+  case TargetOpcode::G_FABS:
+    RTLIBCASE(ABS_F);
   }
   llvm_unreachable("Unknown libcall function");
 }
@@ -653,14 +703,18 @@ LegalizerHelper::libcall(MachineInstr &MI) {
   switch (MI.getOpcode()) {
   default:
     return UnableToLegalize;
+  case TargetOpcode::G_ADD:
+  case TargetOpcode::G_SUB:
   case TargetOpcode::G_AND:
   case TargetOpcode::G_OR:
   case TargetOpcode::G_XOR:
+  case TargetOpcode::G_MUL:
   case TargetOpcode::G_SDIV:
   case TargetOpcode::G_UDIV:
   case TargetOpcode::G_SREM:
   case TargetOpcode::G_UREM:
-  case TargetOpcode::G_CTLZ_ZERO_UNDEF: {
+  case TargetOpcode::G_CTLZ_ZERO_UNDEF:
+  case TargetOpcode::G_BITREVERSE: {
     Type *HLTy = IntegerType::get(Ctx, Size);
     auto Status = simpleLibcall(MI, MIRBuilder, Size, HLTy);
     if (Status != Legalized)
@@ -688,6 +742,8 @@ LegalizerHelper::libcall(MachineInstr &MI) {
                   {{MI.getOperand(1).getReg(), OpTy}, {AmountReg, AmountTy}});
     break;
   }
+  case TargetOpcode::G_INTRINSIC_TRUNC:
+  case TargetOpcode::G_INTRINSIC_ROUND:
   case TargetOpcode::G_FADD:
   case TargetOpcode::G_FSUB:
   case TargetOpcode::G_FMUL:
@@ -709,7 +765,9 @@ LegalizerHelper::libcall(MachineInstr &MI) {
   case TargetOpcode::G_FSQRT:
   case TargetOpcode::G_FRINT:
   case TargetOpcode::G_FNEARBYINT:
-  case TargetOpcode::G_INTRINSIC_ROUNDEVEN: {
+  case TargetOpcode::G_INTRINSIC_ROUNDEVEN:
+  case TargetOpcode::G_FNEG:
+  case TargetOpcode::G_FABS: {
     Type *HLTy = getFloatTypeForLLT(Ctx, LLTy);
     if (!HLTy || (Size != 32 && Size != 64 && Size != 80 && Size != 128)) {
       LLVM_DEBUG(dbgs() << "No libcall available for type " << LLTy << ".\n");
@@ -883,14 +941,18 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
   }
 
   case TargetOpcode::G_FREEZE:
-    return reduceOperationWidth(MI, TypeIdx, NarrowTy);
+    return narrowScalarUnary(MI, TypeIdx, NarrowTy);
 
   case TargetOpcode::G_ADD:
   case TargetOpcode::G_UADDO:
   case TargetOpcode::G_UADDE:
+  case TargetOpcode::G_SADDO:
+  case TargetOpcode::G_SADDE:
   case TargetOpcode::G_SUB:
   case TargetOpcode::G_USUBO:
   case TargetOpcode::G_USUBE:
+  case TargetOpcode::G_SSUBO:
+  case TargetOpcode::G_SSUBE:
     return narrowScalarExtended(MI, TypeIdx, NarrowTy);
   case TargetOpcode::G_MUL:
   case TargetOpcode::G_UMULH:
@@ -4579,6 +4641,37 @@ LegalizerHelper::narrowScalarInsert(MachineInstr &MI, unsigned TypeIdx,
 }
 
 LegalizerHelper::LegalizeResult
+LegalizerHelper::narrowScalarUnary(MachineInstr &MI, unsigned TypeIdx,
+                                   LLT NarrowTy) {
+  Register DstReg = MI.getOperand(0).getReg();
+  LLT DstTy = MRI.getType(DstReg);
+
+  assert(MI.getNumOperands() == 2 && TypeIdx == 0);
+
+  SmallVector<Register, 4> DstRegs, SrcRegs;
+  LLT LeftoverTy;
+  Register DstLeftoverReg, SrcLeftoverReg;
+  if (!extractParts(MI.getOperand(1).getReg(), DstTy, NarrowTy, SrcRegs,
+                    LeftoverTy, SrcLeftoverReg))
+    return UnableToLegalize;
+
+  for (unsigned I = 0, E = SrcRegs.size(); I != E; ++I)
+    DstRegs.push_back(
+        MIRBuilder.buildInstr(MI.getOpcode(), {NarrowTy}, {SrcRegs[I]})
+            .getReg(0));
+
+  if (LeftoverTy.isValid())
+    DstLeftoverReg =
+        MIRBuilder.buildInstr(MI.getOpcode(), {LeftoverTy}, {SrcLeftoverReg})
+            .getReg(0);
+
+  insertParts(DstReg, DstTy, NarrowTy, DstRegs, LeftoverTy, DstLeftoverReg);
+
+  MI.eraseFromParent();
+  return Legalized;
+}
+
+LegalizerHelper::LegalizeResult
 LegalizerHelper::narrowScalarBasic(MachineInstr &MI, unsigned TypeIdx,
                                    LLT NarrowTy) {
   Register DstReg = MI.getOperand(0).getReg();
@@ -4617,24 +4710,41 @@ LegalizerHelper::narrowScalarExtended(MachineInstr &MI, unsigned TypeIdx,
   if (TypeIdx != 0)
     return UnableToLegalize;
 
-  unsigned Opc = MI.getOpcode(), OverflowOpc, ExtendOpc;
+  unsigned Opc = MI.getOpcode(), OverflowOpc, ExtendOpc, FinalExtendOpc;
   Register DstReg, ExtendOutReg, Src1Reg, Src2Reg, ExtendInReg;
 
   switch (Opc) {
   case TargetOpcode::G_ADD:
   case TargetOpcode::G_UADDO:
   case TargetOpcode::G_UADDE:
+  case TargetOpcode::G_SADDO:
+  case TargetOpcode::G_SADDE:
     OverflowOpc = TargetOpcode::G_UADDO;
     ExtendOpc = TargetOpcode::G_UADDE;
     break;
   case TargetOpcode::G_SUB:
   case TargetOpcode::G_USUBO:
   case TargetOpcode::G_USUBE:
+  case TargetOpcode::G_SSUBO:
+  case TargetOpcode::G_SSUBE:
     OverflowOpc = TargetOpcode::G_USUBO;
     ExtendOpc = TargetOpcode::G_USUBE;
     break;
   default:
     llvm_unreachable("Unexpected opcode");
+  }
+  switch (Opc) {
+  case TargetOpcode::G_SADDO:
+  case TargetOpcode::G_SADDE:
+    FinalExtendOpc = TargetOpcode::G_SADDE;
+    break;
+  case TargetOpcode::G_SSUBO:
+  case TargetOpcode::G_SSUBE:
+    FinalExtendOpc = TargetOpcode::G_SSUBE;
+    break;
+  default:
+    FinalExtendOpc = ExtendOpc;
+    break;
   }
 
   {
@@ -4661,13 +4771,17 @@ LegalizerHelper::narrowScalarExtended(MachineInstr &MI, unsigned TypeIdx,
 
   unsigned NumParts = Src1Regs.size();
   unsigned TotalParts = NumParts + LeftoverTy.isValid();
+  assert(TotalParts > 1 && "Should be more that one part");
   for (unsigned I = 0; I != TotalParts; ++I) {
     bool Leftover = I == NumParts;
     LLT PartTy = Leftover ? LeftoverTy : NarrowTy;
     Register PartDstReg = MRI.createGenericVirtualRegister(PartTy);
     Register PartExtendOutReg;
-    if (I == TotalParts - 1)
+    if (I == TotalParts - 1) {
       PartExtendOutReg = ExtendOutReg;
+      // Restore original signedness for most significant opcode.
+      ExtendOpc = FinalExtendOpc;
+    }
     if (!PartExtendOutReg.isValid())
       PartExtendOutReg = MRI.createGenericVirtualRegister(LLT::scalar(1));
     Register PartSrc1Reg = Leftover ? Src1LeftoverReg : Src1Regs[I];
@@ -4995,8 +5109,10 @@ LegalizerHelper::lowerBitCount(MachineInstr &MI) {
       MI.eraseFromParent();
       return Legalized;
     }
+    Observer.changingInstr(MI);
     MI.setDesc(TII.get(TargetOpcode::G_CTPOP));
     MI.getOperand(1).setReg(MIBTmp.getReg(0));
+    Observer.changedInstr(MI);
     return Legalized;
   }
   case TargetOpcode::G_CTPOP: {
