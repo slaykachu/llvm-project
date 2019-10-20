@@ -51,6 +51,7 @@ namespace llvm {
   class MCSectionCOFF;
   class MCSectionELF;
   class MCSectionMachO;
+  class MCSectionOMF;
   class MCSectionWasm;
   class MCSectionXCOFF;
   class MCStreamer;
@@ -95,6 +96,7 @@ namespace llvm {
     SpecificBumpPtrAllocator<MCSectionCOFF> COFFAllocator;
     SpecificBumpPtrAllocator<MCSectionELF> ELFAllocator;
     SpecificBumpPtrAllocator<MCSectionMachO> MachOAllocator;
+    SpecificBumpPtrAllocator<MCSectionOMF> OMFAllocator;
     SpecificBumpPtrAllocator<MCSectionWasm> WasmAllocator;
     SpecificBumpPtrAllocator<MCSectionXCOFF> XCOFFAllocator;
     SpecificBumpPtrAllocator<MCInst> MCInstAllocator;
@@ -279,11 +281,23 @@ namespace llvm {
       }
     };
 
+    struct OMFSectionKey {
+      std::string SectionName;
+
+      explicit OMFSectionKey(StringRef SectionName)
+          : SectionName(SectionName) {}
+
+      bool operator<(const OMFSectionKey &Other) const {
+        return SectionName < Other.SectionName;
+      }
+    };
+
     StringMap<MCSectionMachO *> MachOUniquingMap;
     std::map<ELFSectionKey, MCSectionELF *> ELFUniquingMap;
     std::map<COFFSectionKey, MCSectionCOFF *> COFFUniquingMap;
     std::map<WasmSectionKey, MCSectionWasm *> WasmUniquingMap;
     std::map<XCOFFSectionKey, MCSectionXCOFF *> XCOFFUniquingMap;
+    std::map<OMFSectionKey, MCSectionOMF *> OMFUniquingMap;
     StringMap<bool> RelSecNames;
 
     SpecificBumpPtrAllocator<MCSubtargetInfo> MCSubtargetAllocator;
@@ -567,6 +581,8 @@ namespace llvm {
                                     XCOFF::SymbolType CSectType,
                                     SectionKind K,
                                     const char *BeginSymName = nullptr);
+
+    MCSectionOMF *getOMFSection(const Twine &Section, SectionKind Kind);
 
     // Create and save a copy of STI and return a reference to the copy.
     MCSubtargetInfo &getSubtargetCopy(const MCSubtargetInfo &STI);

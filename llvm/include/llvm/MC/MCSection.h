@@ -40,7 +40,8 @@ class MCSection {
 public:
   static constexpr unsigned NonUniqueID = ~0U;
 
-  enum SectionVariant { SV_COFF = 0, SV_ELF, SV_MachO, SV_Wasm, SV_XCOFF };
+  enum SectionVariant { SV_COFF = 0, SV_ELF, SV_MachO, SV_OMF, SV_Wasm,
+                        SV_XCOFF };
 
   /// Express the state of bundle locked groups while emitting code.
   enum BundleLockStateType {
