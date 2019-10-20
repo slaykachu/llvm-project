@@ -244,6 +244,15 @@ namespace CallingConv {
     /// Calling convention used for AMD graphics targets.
     AMDGPU_Gfx = 100,
 
+    /// Calling conventions used for special Z80 rtlib functions
+    /// which pass in registers and save all registers.
+    Z80_LibCall = 101,
+    Z80_LibCall_AB = 102,
+    Z80_LibCall_AC = 103,
+    Z80_LibCall_BC = 104,
+    Z80_LibCall_L = 105,
+    Z80_LibCall_F = 106,
+
     /// The highest possible calling convention ID. Must be some 2^k - 1.
     MaxID = 1023
   };
