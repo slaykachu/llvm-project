@@ -19,8 +19,6 @@
 namespace llvm {
 
 class MCSectionOMF final : public MCSection {
-  SmallString<8> SectionName;
-
 private:
   friend class MCContext;
   MCSectionOMF(StringRef Name, SectionKind K, MCSymbol *Begin);
@@ -28,17 +26,13 @@ private:
 public:
   ~MCSectionOMF();
 
-  StringRef getSectionName() const { return SectionName; }
-
   void PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                             raw_ostream &OS,
                             const MCExpr *Subsection) const override;
   bool UseCodeAlign() const override { return getKind().isText(); }
   bool isVirtualSection() const override { return getKind().isBSS(); }
 
-  static bool classof(const MCSection *S) {
-    return S->getVariant() == SV_OMF;
-  }
+  static bool classof(const MCSection *S) { return S->getVariant() == SV_OMF; }
 };
 
 } // end namespace llvm

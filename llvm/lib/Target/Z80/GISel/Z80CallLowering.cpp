@@ -70,6 +70,21 @@ struct Z80OutgoingValueHandler : public CallLowering::OutgoingValueHandler {
     MIRBuilder.buildStore(extendRegister(ValVReg, VA), Addr, *MMO);
   }
 
+  bool finalize(CCState &State) override {
+    if (State.getCallingConv() == CallingConv::Z80_TIFlags) {
+      bool Is24Bit = STI.is24Bit();
+      MVT VT = Is24Bit ? MVT::i24 : MVT::i16;
+      Register FlagsReg =
+          MIRBuilder
+              .buildConstant(LLT(VT), STI.hasEZ80Ops() ? 0xD00080 : 0x89F0)
+              .getReg(0);
+      CCValAssign VA = CCValAssign::getReg(~0, VT, Is24Bit ? Z80::UIY : Z80::IY,
+                                           VT, CCValAssign::Full);
+      assignValueToReg(FlagsReg, VA.getLocReg(), VA);
+    }
+    return ValueHandler::finalize(State);
+  }
+
 protected:
   MachineInstrBuilder &MIB;
   const DataLayout &DL;

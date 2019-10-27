@@ -2862,6 +2862,12 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
         << type_name;                                                          \
     break;
 #include "clang/Basic/AArch64SVEACLETypes.def"
+  case BuiltinType::Int48:
+    Out << "9z80_int48";
+    break;
+  case BuiltinType::UInt48:
+    Out << "10z80_uint48";
+    break;
   }
 }
 

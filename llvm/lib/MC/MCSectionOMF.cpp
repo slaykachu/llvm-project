@@ -23,5 +23,5 @@ void MCSectionOMF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                                          raw_ostream &OS,
                                          const MCExpr *Subsection) const {
   assert(!Subsection && "Unimplemented!");
-  OS << "\tSEGMENT\t" << getSectionName() << '\n';
+  OS << "\tSEGMENT\t" << getName() << '\n';
 }
