@@ -97,7 +97,7 @@ public:
 
   /// Legalize an instruction by splitting it into simpler parts, hopefully
   /// understood by the target.
-  LegalizeResult lower(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
+  LegalizeResult lower(MachineInstr &MI, unsigned TypeIdx);
 
   /// Legalize a vector instruction by splitting into multiple components, each
   /// acting on the same scalar type as the original but with fewer elements.
@@ -181,9 +181,8 @@ private:
 
   /// Version which handles irregular splits.
   bool extractParts(Register Reg, LLT RegTy, LLT MainTy,
-                    LLT &LeftoverTy,
-                    SmallVectorImpl<Register> &VRegs,
-                    SmallVectorImpl<Register> &LeftoverVRegs);
+                    SmallVectorImpl<Register> &VRegs, LLT &LeftoverTy,
+                    Register &LeftoverReg);
 
   /// Helper function to build a wide generic register \p DstReg of type \p
   /// RegTy from smaller parts. This will produce a G_MERGE_VALUES,
@@ -194,9 +193,9 @@ private:
   ///
   /// If \p ResultTy does not evenly break into \p PartTy sized pieces, the
   /// remainder must be specified with \p LeftoverRegs of type \p LeftoverTy.
-  void insertParts(Register DstReg, LLT ResultTy,
-                   LLT PartTy, ArrayRef<Register> PartRegs,
-                   LLT LeftoverTy = LLT(), ArrayRef<Register> LeftoverRegs = {});
+  void insertParts(Register DstReg, LLT ResultTy, LLT PartTy,
+                   ArrayRef<Register> PartRegs, LLT LeftoverTy = LLT(),
+                   Register LeftoverReg = Register());
 
   /// Unmerge \p SrcReg into smaller sized values, and append them to \p
   /// Parts. The elements of \p Parts will be the greatest common divisor type
@@ -314,10 +313,13 @@ public:
 
   LegalizeResult narrowScalarShift(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
   LegalizeResult narrowScalarMul(MachineInstr &MI, LLT Ty);
-  LegalizeResult narrowScalarExtract(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
+  LegalizeResult narrowScalarExtract(MachineInstr &MI, unsigned TypeIdx,
+                                     LLT Ty);
   LegalizeResult narrowScalarInsert(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
 
   LegalizeResult narrowScalarBasic(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
+  LegalizeResult narrowScalarExtended(MachineInstr &MI, unsigned TypeIdx,
+                                      LLT Ty);
   LegalizeResult narrowScalarExt(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
   LegalizeResult narrowScalarSelect(MachineInstr &MI, unsigned TypeIdx, LLT Ty);
   LegalizeResult narrowScalarCTLZ(MachineInstr &MI, unsigned TypeIdx, LLT Ty);

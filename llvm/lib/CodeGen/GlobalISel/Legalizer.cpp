@@ -93,6 +93,7 @@ static bool isArtifact(const MachineInstr &MI) {
   switch (MI.getOpcode()) {
   default:
     return false;
+  case TargetOpcode::G_IMPLICIT_DEF:
   case TargetOpcode::G_TRUNC:
   case TargetOpcode::G_ZEXT:
   case TargetOpcode::G_ANYEXT:
@@ -102,8 +103,12 @@ static bool isArtifact(const MachineInstr &MI) {
   case TargetOpcode::G_CONCAT_VECTORS:
   case TargetOpcode::G_BUILD_VECTOR:
   case TargetOpcode::G_EXTRACT:
+  case TargetOpcode::G_INSERT:
     return true;
   }
+}
+static bool isPreISelGenericOpcodeOrCopy(unsigned Opcode) {
+  return isPreISelGenericOpcode(Opcode) || Opcode == TargetOpcode::COPY;
 }
 using InstListTy = GISelWorkList<256>;
 using ArtifactListTy = GISelWorkList<128>;
@@ -112,24 +117,34 @@ namespace {
 class LegalizerWorkListManager : public GISelChangeObserver {
   InstListTy &InstList;
   ArtifactListTy &ArtifactList;
+  MachineRegisterInfo &MRI;
 #ifndef NDEBUG
   SmallVector<MachineInstr *, 4> NewMIs;
 #endif
 
 public:
-  LegalizerWorkListManager(InstListTy &Insts, ArtifactListTy &Arts)
-      : InstList(Insts), ArtifactList(Arts) {}
+  LegalizerWorkListManager(InstListTy &Insts, ArtifactListTy &Arts,
+                           MachineRegisterInfo &MRI)
+      : InstList(Insts), ArtifactList(Arts), MRI(MRI) {}
 
   void createdOrChangedInstr(MachineInstr &MI) {
     // Only legalize pre-isel generic instructions.
     // Legalization process could generate Target specific pseudo
     // instructions with generic types. Don't record them
-    if (isPreISelGenericOpcode(MI.getOpcode())) {
+    // Do record copies in case they become dead and use an artifact.
+    if (isPreISelGenericOpcodeOrCopy(MI.getOpcode())) {
       if (isArtifact(MI))
         ArtifactList.insert(&MI);
       else
         InstList.insert(&MI);
     }
+  }
+
+  void maybeRemovingUses(MachineInstr &MI) {
+    for (const MachineOperand &MO : MI.explicit_uses())
+      if (MO.isReg() && MO.getReg().isVirtual())
+        for (MachineInstr &DefMI : MRI.def_instructions(MO.getReg()))
+          createdOrChangedInstr(DefMI);
   }
 
   void createdInstr(MachineInstr &MI) override {
@@ -147,12 +162,14 @@ public:
 
   void erasingInstr(MachineInstr &MI) override {
     LLVM_DEBUG(dbgs() << ".. .. Erasing: " << MI);
+    maybeRemovingUses(MI);
     InstList.remove(&MI);
     ArtifactList.remove(&MI);
   }
 
   void changingInstr(MachineInstr &MI) override {
     LLVM_DEBUG(dbgs() << ".. .. Changing MI: " << MI);
+    maybeRemovingUses(MI);
   }
 
   void changedInstr(MachineInstr &MI) override {
@@ -185,7 +202,7 @@ Legalizer::legalizeMachineFunction(MachineFunction &MF, const LegalizerInfo &LI,
     for (MachineInstr &MI : *MBB) {
       // Only legalize pre-isel generic instructions: others don't have types
       // and are assumed to be legal.
-      if (!isPreISelGenericOpcode(MI.getOpcode()))
+      if (!isPreISelGenericOpcodeOrCopy(MI.getOpcode()))
         continue;
       if (isArtifact(MI))
         ArtifactList.deferred_insert(&MI);
@@ -197,7 +214,7 @@ Legalizer::legalizeMachineFunction(MachineFunction &MF, const LegalizerInfo &LI,
   InstList.finalize();
 
   // This observer keeps the worklists updated.
-  LegalizerWorkListManager WorkListObserver(InstList, ArtifactList);
+  LegalizerWorkListManager WorkListObserver(InstList, ArtifactList, MRI);
   // We want both WorkListObserver as well as all the auxiliary observers (e.g.
   // CSEInfo) to observe all changes. Use the wrapper observer.
   GISelObserverWrapper WrapperObserver(&WorkListObserver);
@@ -220,8 +237,9 @@ Legalizer::legalizeMachineFunction(MachineFunction &MF, const LegalizerInfo &LI,
     unsigned NumArtifacts = ArtifactList.size();
     while (!InstList.empty()) {
       MachineInstr &MI = *InstList.pop_back_val();
-      assert(isPreISelGenericOpcode(MI.getOpcode()) &&
-             "Expecting generic opcode");
+      assert(MI.getParent() && "Instruction deleted?");
+      assert(isPreISelGenericOpcodeOrCopy(MI.getOpcode()) &&
+             "Expecting generic opcode or copy");
       if (isTriviallyDead(MI, MRI)) {
         LLVM_DEBUG(dbgs() << MI << "Is dead; erasing.\n");
         MI.eraseFromParentAndMarkDBGValuesForRemoval();
@@ -269,8 +287,8 @@ Legalizer::legalizeMachineFunction(MachineFunction &MF, const LegalizerInfo &LI,
     LocObserver.checkpoint();
     while (!ArtifactList.empty()) {
       MachineInstr &MI = *ArtifactList.pop_back_val();
-      assert(isPreISelGenericOpcode(MI.getOpcode()) &&
-             "Expecting generic opcode");
+      assert(MI.getParent() && "Instruction deleted?");
+      assert(isArtifact(MI) && "Expecting artifact");
       if (isTriviallyDead(MI, MRI)) {
         LLVM_DEBUG(dbgs() << MI << "Is dead\n");
         RemoveDeadInstFromLists(&MI);
