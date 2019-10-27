@@ -1083,6 +1083,12 @@ public:
       // \brief  PowerPC MMA types with auto numeration
 #define PPC_VECTOR_TYPE(Name, Id, Size) PREDEF_TYPE_##Id##_ID,
 #include "clang/Basic/PPCTypes.def"
+
+      /// The '__uint48_t' type.
+      PREDEF_TYPE_UINT48_ID,
+
+      /// The '__int48_t' type.
+      PREDEF_TYPE_INT48_ID,
     };
 
     /// The number of predefined type IDs that are reserved for
@@ -1201,6 +1207,13 @@ public:
 
       /// The internal '__type_pack_element' template.
       PREDEF_DECL_TYPE_PACK_ELEMENT_ID = 17,
+
+      /// The signed 48-bit integer type.
+      PREDEF_DECL_INT_48_ID = 18,
+
+      /// The unsigned 48-bit integer type.
+      PREDEF_DECL_UNSIGNED_INT_48_ID = 19,
+
     };
 
     /// The number of declaration IDs that are predefined.

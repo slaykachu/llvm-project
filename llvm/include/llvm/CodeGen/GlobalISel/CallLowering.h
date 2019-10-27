@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/TargetCallingConv.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
@@ -78,6 +79,9 @@ public:
   };
 
   struct CallLoweringInfo {
+    /// Attributes attached to the call.
+    AttributeList CallAttributes;
+
     /// Calling convention to be used for the call.
     CallingConv::ID CallConv = CallingConv::C;
 

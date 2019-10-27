@@ -252,6 +252,7 @@ namespace CallingConv {
     Z80_LibCall_BC = 104,
     Z80_LibCall_L = 105,
     Z80_LibCall_F = 106,
+    Z80_TIFlags = 107,
 
     /// The highest possible calling convention ID. Must be some 2^k - 1.
     MaxID = 1023

@@ -3771,6 +3771,10 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       ConsumedEnd = PrevTokLocation;
       break;
     }
+    case tok::kw___int48:
+      isInvalid = DS.SetTypeSpecType(DeclSpec::TST_int48, Loc, PrevSpec,
+                                     DiagID, Policy);
+      break;
     case tok::kw___int128:
       isInvalid = DS.SetTypeSpecType(DeclSpec::TST_int128, Loc, PrevSpec,
                                      DiagID, Policy);
@@ -4873,6 +4877,7 @@ bool Parser::isKnownToBeTypeSpecifier(const Token &Tok) const {
     // type-specifiers
   case tok::kw_short:
   case tok::kw_long:
+  case tok::kw___int48:
   case tok::kw___int64:
   case tok::kw___int128:
   case tok::kw_signed:
@@ -4954,6 +4959,7 @@ bool Parser::isTypeSpecifierQualifier() {
     // type-specifiers
   case tok::kw_short:
   case tok::kw_long:
+  case tok::kw___int48:
   case tok::kw___int64:
   case tok::kw___int128:
   case tok::kw_signed:
@@ -5122,6 +5128,7 @@ bool Parser::isDeclarationSpecifier(bool DisambiguatingWithExpression) {
     // type-specifiers
   case tok::kw_short:
   case tok::kw_long:
+  case tok::kw___int48:
   case tok::kw___int64:
   case tok::kw___int128:
   case tok::kw_signed:

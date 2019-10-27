@@ -362,6 +362,7 @@ bool Declarator::isDeclarationOfFunction() const {
     case TST_float:
     case TST_half:
     case TST_int:
+    case TST_int48:
     case TST_int128:
     case TST_extint:
     case TST_struct:
@@ -548,6 +549,7 @@ const char *DeclSpec::getSpecifierName(DeclSpec::TST T,
   case DeclSpec::TST_char16:      return "char16_t";
   case DeclSpec::TST_char32:      return "char32_t";
   case DeclSpec::TST_int:         return "int";
+  case DeclSpec::TST_int48:       return "__int48";
   case DeclSpec::TST_int128:      return "__int128";
   case DeclSpec::TST_extint:      return "_ExtInt";
   case DeclSpec::TST_half:        return "half";
@@ -1241,9 +1243,10 @@ void DeclSpec::Finish(Sema &S, const PrintingPolicy &Policy) {
   if (getTypeSpecSign() != TypeSpecifierSign::Unspecified) {
     if (TypeSpecType == TST_unspecified)
       TypeSpecType = TST_int; // unsigned -> unsigned int, signed -> signed int.
-    else if (TypeSpecType != TST_int && TypeSpecType != TST_int128 &&
-             TypeSpecType != TST_char && TypeSpecType != TST_wchar &&
-             !IsFixedPointType && TypeSpecType != TST_extint) {
+    else if (TypeSpecType != TST_int && TypeSpecType != TST_int48 &&
+             TypeSpecType != TST_int128 && TypeSpecType != TST_char &&
+             TypeSpecType != TST_wchar && !IsFixedPointType &&
+             TypeSpecType != TST_extint) {
       S.Diag(TSSLoc, diag::err_invalid_sign_spec)
         << getSpecifierName((TST)TypeSpecType, Policy);
       // signed double -> double.
