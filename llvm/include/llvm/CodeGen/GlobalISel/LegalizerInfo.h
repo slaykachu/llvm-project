@@ -20,11 +20,11 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/LowLevelTypeImpl.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/LowLevelTypeImpl.h"
 #include <cassert>
 #include <cstdint>
 #include <tuple>
@@ -1272,6 +1272,14 @@ public:
   virtual bool legalizeCustom(LegalizerHelper &Helper,
                               MachineInstr &MI) const {
     llvm_unreachable("must implement this if custom action is used");
+  }
+  virtual LegalizerHelper::LegalizeResult
+  legalizeCustom(MachineInstr &MI, MachineRegisterInfo &MRI,
+                 MachineIRBuilder &MIRBuilder, GISelChangeObserver &Observer,
+                 LegalizerHelper &Helper) const {
+    return legalizeCustom(Helper, MI)
+               ? LegalizerHelper::Legalized
+               : LegalizerHelper::UnableToLegalize;
   }
 
   /// \returns true if MI is either legal or has been legalized and false if not
