@@ -444,7 +444,7 @@ bool AMDGPUCallLowering::lowerReturnVal(MachineIRBuilder &B,
 
   CCAssignFn *AssignFn = TLI.CCAssignFnForReturn(CC, F.isVarArg());
   AMDGPUOutgoingValueHandler RetHandler(B, *MRI, Ret, AssignFn);
-  return handleAssignments(B, SplitRetInfos, RetHandler);
+  return handleAssignments(CC, F.isVarArg(), B, SplitRetInfos, RetHandler);
 }
 
 bool AMDGPUCallLowering::lowerReturn(MachineIRBuilder &B,
