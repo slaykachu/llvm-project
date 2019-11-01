@@ -5724,3 +5724,10 @@ def _SLASH_Ze : CLFlag<"Ze">;
 def _SLASH_Zg : CLFlag<"Zg">;
 def _SLASH_ZI : CLFlag<"ZI">;
 def _SLASH_ZW : CLJoined<"ZW">;
+
+//===----------------------------------------------------------------------===//
+// Temp Debug Options
+//===----------------------------------------------------------------------===//
+
+def test_ez80_hack : Flag<["-"], "test-ez80-hack">,
+    Flags<[CC1Option]>, HelpText<"Enable hack for testing ez80 code generation.">;
