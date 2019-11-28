@@ -39,9 +39,12 @@ inline OneUse_match<SubPat> m_OneUse(const SubPat &SP) {
   return SP;
 }
 
+template <typename Int>
 struct ConstantMatch {
-  int64_t &CR;
-  ConstantMatch(int64_t &C) : CR(C) {}
+  static_assert(std::numeric_limits<Int>::is_integer,
+                "Only integral types are allowed.");
+  Int &CR;
+  ConstantMatch(Int &C) : CR(C) {}
   bool match(const MachineRegisterInfo &MRI, Register Reg) {
     if (auto MaybeCst = getConstantVRegVal(Reg, MRI)) {
       CR = *MaybeCst;
@@ -51,7 +54,8 @@ struct ConstantMatch {
   }
 };
 
-inline ConstantMatch m_ICst(int64_t &Cst) { return ConstantMatch(Cst); }
+template <typename Int>
+inline ConstantMatch<Int> m_ICst(Int &Cst) { return {Cst}; }
 
 /// Matcher for a specific constant value.
 struct SpecificConstantMatch {

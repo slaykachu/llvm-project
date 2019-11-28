@@ -37,23 +37,19 @@ struct Z80OutgoingValueHandler : public CallLowering::OutgoingValueHandler {
                           CCAssignFn *AssignFn)
       : OutgoingValueHandler(MIRBuilder, MRI, AssignFn), MIB(MIB),
         DL(MIRBuilder.getMF().getDataLayout()),
-        STI(MIRBuilder.getMF().getSubtarget<Z80Subtarget>()) {}
+        STI(MIRBuilder.getMF().getSubtarget<Z80Subtarget>()) {
+    LLT PtrTy = LLT::pointer(0, DL.getPointerSizeInBits(0));
+    Register SPReg = STI.getRegisterInfo()->getStackRegister();
+    SPRegCopy = MIRBuilder.buildCopy(PtrTy, SPReg).getReg(0);
+  }
 
-  Register getStackAddress(uint64_t Size, int64_t Offset,
+  Register getStackAddress(uint64_t Size, int64_t Off,
                            MachinePointerInfo &MPO) override {
-    LLT p0 = LLT::pointer(0, DL.getPointerSizeInBits(0));
-    LLT SType = LLT::scalar(DL.getPointerSizeInBits(0));
-    Register SPReg = MRI.createGenericVirtualRegister(p0);
-    MIRBuilder.buildCopy(SPReg, STI.getRegisterInfo()->getStackRegister());
-
-    Register OffsetReg = MRI.createGenericVirtualRegister(SType);
-    MIRBuilder.buildConstant(OffsetReg, Offset);
-
-    Register AddrReg = MRI.createGenericVirtualRegister(p0);
-    MIRBuilder.buildPtrAdd(AddrReg, SPReg, OffsetReg);
-
-    MPO = MachinePointerInfo::getStack(MIRBuilder.getMF(), Offset);
-    return AddrReg;
+    LLT PtrTy = LLT::pointer(0, DL.getPointerSizeInBits(0));
+    LLT OffTy = LLT::scalar(DL.getIndexSizeInBits(0));
+    MPO = MachinePointerInfo::getStack(MIRBuilder.getMF(), Off);
+    auto OffI = MIRBuilder.buildConstant(OffTy, Off);
+    return MIRBuilder.buildPtrAdd(PtrTy, SPRegCopy, OffI).getReg(0);
   }
 
   void assignValueToReg(Register ValVReg, Register PhysReg,
@@ -82,6 +78,8 @@ struct Z80OutgoingValueHandler : public CallLowering::OutgoingValueHandler {
                                            VT, CCValAssign::Full);
       assignValueToReg(FlagsReg, VA.getLocReg(), VA);
     }
+    if (MRI.use_empty(SPRegCopy))
+      MRI.getVRegDef(SPRegCopy)->eraseFromParent();
     return ValueHandler::finalize(State);
   }
 
@@ -89,6 +87,27 @@ protected:
   MachineInstrBuilder &MIB;
   const DataLayout &DL;
   const Z80Subtarget &STI;
+  Register SPRegCopy;
+};
+
+struct TailCallArgHandler : public Z80OutgoingValueHandler {
+  TailCallArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
+                     MachineInstrBuilder &MIB, CCAssignFn *AssignFn, int FPDiff)
+      : Z80OutgoingValueHandler(MIRBuilder, MRI, MIB, AssignFn),
+        FPDiff(FPDiff) {}
+
+  Register getStackAddress(uint64_t Size, int64_t Offset,
+                           MachinePointerInfo &MPO) override {
+    MachineFunction &MF = MIRBuilder.getMF();
+    int FI = MF.getFrameInfo().CreateFixedObject(Size, FPDiff + Offset, true);
+    MPO = MachinePointerInfo::getFixedStack(MF, FI);
+    return MIRBuilder
+        .buildFrameIndex(LLT::pointer(0, DL.getPointerSizeInBits(0)), FI)
+        .getReg(0);
+  }
+
+private:
+  int FPDiff;
 };
 
 struct CallArgHandler : public Z80OutgoingValueHandler {
@@ -112,6 +131,7 @@ struct CallArgHandler : public Z80OutgoingValueHandler {
 
   Register getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO) override {
+    MIRBuilder.setInsertPt(MIRBuilder.getMBB(), std::next(Before));
     return Z80OutgoingValueHandler::getStackAddress(Size, Offset, MPO);
   }
 
@@ -257,10 +277,11 @@ struct FormalArgHandler : public Z80IncomingValueHandler {
 
   bool finalize(CCState &State) override {
     MachineFunction &MF = MIRBuilder.getMF();
-    MachineFrameInfo &MFI = MF.getFrameInfo();
+    auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
+    FuncInfo.setArgFrameSize(State.getNextStackOffset());
     if (State.isVarArg()) {
-      Z80MachineFunctionInfo &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
-      int FrameIdx = MFI.CreateFixedObject(1, State.getNextStackOffset(), true);
+      int FrameIdx = MF.getFrameInfo().CreateFixedObject(
+          1, State.getNextStackOffset(), true);
       FuncInfo.setVarArgsFrameIndex(FrameIdx);
     }
     return true;
@@ -303,6 +324,315 @@ void Z80CallLowering::splitToValueTypes(const ArgInfo &OrigArg,
   }
 }
 
+/// Return true if the calling convention is one that we can guarantee TCO for.
+static bool canGuaranteeTCO(CallingConv::ID CC) {
+  return CC == CallingConv::Fast;
+}
+
+/// Return true if we might ever do TCO for calls with this calling convention.
+static bool mayTailCallThisCC(CallingConv::ID CC) {
+  switch (CC) {
+  case CallingConv::C:
+  case CallingConv::PreserveMost:
+  case CallingConv::Z80_LibCall:
+  case CallingConv::Z80_LibCall_AB:
+  case CallingConv::Z80_LibCall_AC:
+  case CallingConv::Z80_LibCall_BC:
+  case CallingConv::Z80_LibCall_L:
+  case CallingConv::Z80_LibCall_F:
+  case CallingConv::Z80_TIFlags:
+    return true;
+  default:
+    return canGuaranteeTCO(CC);
+  }
+}
+
+bool Z80CallLowering::doCallerAndCalleePassArgsTheSameWay(
+    CallLoweringInfo &Info, MachineFunction &MF,
+    SmallVectorImpl<ArgInfo> &InArgs) const {
+  const Function &CallerF = MF.getFunction();
+  CallingConv::ID CalleeCC = Info.CallConv;
+  CallingConv::ID CallerCC = CallerF.getCallingConv();
+
+  // If the calling conventions match, then everything must be the same.
+  if (CalleeCC == CallerCC)
+    return true;
+
+  // Check if the caller and callee will handle arguments in the same way.
+  if (!resultsCompatible(Info, MF, InArgs, CC_Z80, CC_Z80, CC_Z80, CC_Z80))
+    return false;
+
+  // Make sure that the caller and callee preserve all of the same registers.
+  const auto &TRI = *MF.getSubtarget<Z80Subtarget>().getRegisterInfo();
+  const uint32_t *CallerPreserved = TRI.getCallPreservedMask(MF, CallerCC);
+  const uint32_t *CalleePreserved = TRI.getCallPreservedMask(MF, CalleeCC);
+
+  return TRI.regmaskSubsetEqual(CallerPreserved, CalleePreserved);
+}
+
+bool Z80CallLowering::areCalleeOutgoingArgsTailCallable(
+    CallLoweringInfo &Info, MachineFunction &MF,
+    SmallVectorImpl<ArgInfo> &OutArgs) const {
+  // If there are no outgoing arguments, then we are done.
+  if (OutArgs.empty())
+    return true;
+
+  const Function &CallerF = MF.getFunction();
+  CallingConv::ID CalleeCC = Info.CallConv;
+  CallingConv::ID CallerCC = CallerF.getCallingConv();
+
+  // We have outgoing arguments. Make sure that we can tail call with them.
+  SmallVector<CCValAssign, 16> OutLocs;
+  CCState OutInfo(CalleeCC, false, MF, OutLocs, CallerF.getContext());
+
+  if (!analyzeArgInfo(OutInfo, OutArgs, CC_Z80, CC_Z80)) {
+    LLVM_DEBUG(dbgs() << "... Could not analyze call operands.\n");
+    return false;
+  }
+
+  // Make sure that they can fit on the caller's stack.
+  const auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
+  if (OutInfo.getNextStackOffset() > FuncInfo.getArgFrameSize()) {
+    LLVM_DEBUG(dbgs() << "... Cannot fit call operands on caller's stack.\n");
+    return false;
+  }
+
+  // Verify that the parameters in callee-saved registers match.
+  // TODO: Port this over to CallLowering as general code once swiftself is
+  // supported.
+  const auto &TRI = *MF.getSubtarget<Z80Subtarget>().getRegisterInfo();
+  const uint32_t *CallerPreservedMask = TRI.getCallPreservedMask(MF, CallerCC);
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  for (unsigned i = 0; i < OutLocs.size(); ++i) {
+    auto &ArgLoc = OutLocs[i];
+    // If it's not a register, it's fine.
+    if (!ArgLoc.isRegLoc()) {
+      if (Info.IsVarArg) {
+        // Be conservative and disallow variadic memory operands to match SDAG's
+        // behaviour.
+        // FIXME: If the caller's calling convention is C, then we can
+        // potentially use its argument area. However, for cases like fastcc,
+        // we can't do anything.
+        LLVM_DEBUG(
+            dbgs()
+            << "... Cannot tail call vararg function with stack arguments\n");
+        return false;
+      }
+      continue;
+    }
+
+    Register Reg = ArgLoc.getLocReg();
+
+    // Only look at callee-saved registers.
+    if (MachineOperand::clobbersPhysReg(CallerPreservedMask, Reg))
+      continue;
+
+    LLVM_DEBUG(
+        dbgs()
+        << "... Call has an argument passed in a callee-saved register.\n");
+
+    // Check if it was copied from.
+    ArgInfo &OutInfo = OutArgs[i];
+
+    if (OutInfo.Regs.size() > 1) {
+      LLVM_DEBUG(
+          dbgs() << "... Cannot handle arguments in multiple registers.\n");
+      return false;
+    }
+
+    // Check if we copy the register, walking through copies from virtual
+    // registers. Note that getDefIgnoringCopies does not ignore copies from
+    // physical registers.
+    MachineInstr *RegDef = getDefIgnoringCopies(OutInfo.Regs[0], MRI);
+    if (!RegDef || RegDef->getOpcode() != TargetOpcode::COPY) {
+      LLVM_DEBUG(
+          dbgs()
+          << "... Parameter was not copied into a VReg, cannot tail call.\n");
+      return false;
+    }
+
+    // Got a copy. Verify that it's the same as the register we want.
+    Register CopyRHS = RegDef->getOperand(1).getReg();
+    if (CopyRHS != Reg) {
+      LLVM_DEBUG(dbgs() << "... Callee-saved register was not copied into "
+                           "VReg, cannot tail call.\n");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool Z80CallLowering::isEligibleForTailCallOptimization(
+    MachineIRBuilder &MIRBuilder, CallLoweringInfo &Info,
+    SmallVectorImpl<ArgInfo> &InArgs, SmallVectorImpl<ArgInfo> &OutArgs) const {
+
+  // Must pass all target-independent checks in order to tail call optimize.
+  if (!Info.IsTailCall)
+    return false;
+
+  CallingConv::ID CalleeCC = Info.CallConv;
+  MachineFunction &MF = MIRBuilder.getMF();
+  const Function &CallerF = MF.getFunction();
+
+  LLVM_DEBUG(dbgs() << "Attempting to lower call as tail call\n");
+
+  if (Info.SwiftErrorVReg) {
+    // TODO: We should handle this.
+    // Note that this is also handled by the check for no outgoing arguments.
+    // Proactively disabling this though, because the swifterror handling in
+    // lowerCall inserts a COPY *after* the location of the call.
+    LLVM_DEBUG(dbgs() << "... Cannot handle tail calls with swifterror yet.\n");
+    return false;
+  }
+
+  if (!mayTailCallThisCC(CalleeCC)) {
+    LLVM_DEBUG(dbgs() << "... Calling convention cannot be tail called.\n");
+    return false;
+  }
+
+  // Byval parameters hand the function a pointer directly into the stack area
+  // we want to reuse during a tail call. Working around this *is* possible (see
+  // X86).
+  //
+  // FIXME: In Z80ISelLowering, this isn't worked around. Can/should we try it?
+  //
+  // FIXME: Check whether the callee also has an "inreg" argument.
+  //
+  // When the caller has a swifterror argument, we don't want to tail call
+  // because would have to move into the swifterror register before the
+  // tail call.
+  if (any_of(CallerF.args(), [](const Argument &A) {
+        return A.hasByValAttr() || A.hasInRegAttr() || A.hasSwiftErrorAttr();
+      })) {
+    LLVM_DEBUG(dbgs() << "... Cannot tail call from callers with byval, "
+                         "inreg, or swifterror arguments\n");
+    return false;
+  }
+
+  // If we have -tailcallopt, then we're done.
+  if (MF.getTarget().Options.GuaranteedTailCallOpt)
+    return canGuaranteeTCO(CalleeCC) && CalleeCC == CallerF.getCallingConv();
+
+  // We don't have -tailcallopt, so we're allowed to change the ABI (sibcall).
+  // Try to find cases where we can do that.
+
+  // I want anyone implementing a new calling convention to think long and hard
+  // about this assert.
+  assert((!Info.IsVarArg || CalleeCC == CallingConv::C) &&
+         "Unexpected variadic calling convention");
+
+  // Verify that the incoming and outgoing arguments from the callee are
+  // safe to tail call.
+  if (!doCallerAndCalleePassArgsTheSameWay(Info, MF, InArgs)) {
+    LLVM_DEBUG(
+        dbgs()
+        << "... Caller and callee have incompatible calling conventions.\n");
+    return false;
+  }
+
+  if (!areCalleeOutgoingArgsTailCallable(Info, MF, OutArgs))
+    return false;
+
+  LLVM_DEBUG(dbgs() << "... Call is eligible for tail call optimization.\n");
+  return true;
+}
+
+bool Z80CallLowering::lowerTailCall(MachineIRBuilder &MIRBuilder,
+                                    CallLoweringInfo &Info,
+                                    SmallVectorImpl<ArgInfo> &OutArgs) const {
+  MachineFunction &MF = MIRBuilder.getMF();
+  const Function &F = MF.getFunction();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  const auto &STI = MF.getSubtarget<Z80Subtarget>();
+  const Z80InstrInfo &TII = *STI.getInstrInfo();
+  const Z80RegisterInfo &TRI = *STI.getRegisterInfo();
+  const auto &FuncInfo = *MF.getInfo<Z80MachineFunctionInfo>();
+
+  // True when we're tail calling, but without -tailcallopt.
+  bool IsSibCall = !MF.getTarget().Options.GuaranteedTailCallOpt;
+
+  // TODO: Right now, regbankselect doesn't know how to handle the rtcGPR64
+  // register class. Until we can do that, we should fall back here.
+  if (F.hasFnAttribute("branch-target-enforcement")) {
+    LLVM_DEBUG(
+        dbgs() << "Cannot lower indirect tail calls with BTI enabled yet.\n");
+    return false;
+  }
+
+  MachineInstrBuilder CallSeqStart;
+  if (!IsSibCall)
+    CallSeqStart = MIRBuilder.buildInstr(TII.getCallFrameSetupOpcode());
+
+  bool Is24Bit = STI.is24Bit();
+  unsigned TCRetOpc = Info.Callee.isReg()
+                          ? Is24Bit ? Z80::TCRETURN24r : Z80::TCRETURN16r
+                          : Is24Bit ? Z80::TCRETURN24 : Z80::TCRETURN16;
+  auto MIB = MIRBuilder.buildInstrNoInsert(TCRetOpc).add(Info.Callee)
+                 .addRegMask(TRI.getCallPreservedMask(MF, Info.CallConv));
+
+  // FPDiff is the byte offset of the call's argument area from the callee's.
+  // Stores to callee stack arguments will be placed in FixedStackSlots offset
+  // by this amount for a tail call. In a sibling call it must be 0 because the
+  // caller will deallocate the entire stack and the callee still expects its
+  // arguments to begin at SP+0.
+  int FPDiff = 0;
+
+  // This will be 0 for sibcalls, potentially nonzero for tail calls produced
+  // by -tailcallopt. For sibcalls, the memory operands for the call are
+  // already available in the caller's incoming argument space.
+  unsigned NumBytes = 0;
+  if (!IsSibCall) {
+    // We aren't sibcalling, so we need to compute FPDiff. We need to do this
+    // before handling assignments, because FPDiff must be known for memory
+    // arguments.
+    unsigned NumReusableBytes = FuncInfo.getArgFrameSize();
+    SmallVector<CCValAssign, 16> OutLocs;
+    CCState OutInfo(Info.CallConv, false, MF, OutLocs, F.getContext());
+    analyzeArgInfo(OutInfo, OutArgs, CC_Z80, CC_Z80);
+
+    // FPDiff will be negative if this tail call requires more space than we
+    // would automatically have in our incoming argument space. Positive if we
+    // actually shrink the stack.
+    FPDiff = NumReusableBytes - NumBytes;
+  }
+
+  // Do the actual argument marshalling.
+  SmallVector<unsigned, 8> PhysRegs;
+  TailCallArgHandler Handler(MIRBuilder, MRI, MIB, CC_Z80, FPDiff);
+  if (!handleAssignments(Info.CallConv, Info.IsVarArg, MIRBuilder, OutArgs,
+                         Handler))
+    return false;
+
+  // If we have -tailcallopt, we need to adjust the stack. We'll do the call
+  // sequence start and end here.
+  if (!IsSibCall) {
+    MIB->getOperand(1).setImm(FPDiff);
+    CallSeqStart.addImm(NumBytes).addImm(0);
+    // End the call sequence *before* emitting the call. Normally, we would
+    // tidy the frame up after the call. However, here, we've laid out the
+    // parameters so that when SP is reset, they will be in the correct
+    // location.
+    MIRBuilder.buildInstr(TII.getCallFrameDestroyOpcode())
+        .addImm(NumBytes).addImm(0);
+  }
+
+  // Now we can add the actual call instruction to the correct basic block.
+  MIRBuilder.insertInstr(MIB);
+
+  // If Callee is a reg, since it is used by a target specific instruction,
+  // it must have a register class matching the constraint of that instruction.
+  if (Info.Callee.isReg())
+    MIB->getOperand(0).setReg(constrainOperandRegClass(
+        MF, TRI, MRI, TII, *MF.getSubtarget().getRegBankInfo(), *MIB,
+        MIB->getDesc(), Info.Callee, 0));
+
+  MF.getFrameInfo().setHasTailCall();
+  Info.LoweredTailCall = true;
+  return true;
+}
+
 bool Z80CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
                                 CallLoweringInfo &Info) const {
   MachineFunction &MF = MIRBuilder.getMF();
@@ -342,6 +672,21 @@ bool Z80CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
       return false;
     splitToValueTypes(Info.OrigRet, InArgs, DL, MRI);
   }
+
+  bool CanTailCallOpt =
+      isEligibleForTailCallOptimization(MIRBuilder, Info, InArgs, OutArgs);
+
+  // We must emit a tail call if we have musttail.
+  if (Info.IsMustTailCall && !CanTailCallOpt) {
+    // There are types of incoming/outgoing arguments we can't handle yet, so
+    // it doesn't make sense to actually die here like in ISelLowering. Instead,
+    // fall back to SelectionDAG and let it try to handle this.
+    LLVM_DEBUG(dbgs() << "Failed to lower musttail call as tail call\n");
+    return false;
+  }
+
+  if (CanTailCallOpt)
+    return lowerTailCall(MIRBuilder, Info, OutArgs);
 
   auto CallSeqStart = MIRBuilder.buildInstr(TII.getCallFrameSetupOpcode());
 
