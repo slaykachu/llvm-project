@@ -45,6 +45,8 @@ private:
                                                     MachineInstr &MI) const;
   LegalizerHelper::LegalizeResult legalizeVAStart(LegalizerHelper &Helper,
                                                   MachineInstr &MI) const;
+  LegalizerHelper::LegalizeResult legalizeShift(LegalizerHelper &Helper,
+                                                MachineInstr &MI) const;
   LegalizerHelper::LegalizeResult legalizeFunnelShift(LegalizerHelper &Helper,
                                                       MachineInstr &MI) const;
   LegalizerHelper::LegalizeResult legalizeCompare(LegalizerHelper &Helper,

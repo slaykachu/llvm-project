@@ -121,7 +121,7 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
       .clampScalar(0, s8, s32);
 
   getActionDefinitionsBuilder({G_SHL, G_LSHR, G_ASHR})
-      .libcallForCartesianProduct(LegalLibcallScalars, {s8})
+      .customForCartesianProduct(LegalLibcallScalars, {s8})
       .clampScalar(1, s8, s8)
       .clampScalar(0, s8, s64);
 
@@ -133,6 +133,12 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
                                G_FCEIL, G_FCOS, G_FSIN, G_FSQRT, G_FFLOOR,
                                G_FRINT, G_FNEARBYINT})
       .libcallFor({s32, s64});
+
+  getActionDefinitionsBuilder(G_FCOPYSIGN)
+      .libcallFor({{s32, s32}, {s64, s64}});
+
+  //getActionDefinitionsBuilder({G_FNEG, G_FABS)
+  //    .customFor({s32, s64});
 
   getActionDefinitionsBuilder(G_FPTRUNC)
       .libcallFor({{s32, s64}});
@@ -215,6 +221,10 @@ Z80LegalizerInfo::legalizeCustomMaybeLegal(LegalizerHelper &Helper,
     return legalizeFConstant(Helper, MI);
   case TargetOpcode::G_VASTART:
     return legalizeVAStart(Helper, MI);
+  case TargetOpcode::G_SHL:
+  case TargetOpcode::G_LSHR:
+  case TargetOpcode::G_ASHR:
+    return legalizeShift(Helper, MI);
   case TargetOpcode::G_FSHL:
   case TargetOpcode::G_FSHR:
     return legalizeFunnelShift(Helper, MI);
@@ -271,6 +281,36 @@ Z80LegalizerInfo::legalizeVAStart(LegalizerHelper &Helper,
 }
 
 LegalizerHelper::LegalizeResult
+Z80LegalizerInfo::legalizeShift(LegalizerHelper &Helper,
+                                MachineInstr &MI) const {
+  assert((MI.getOpcode() == TargetOpcode::G_SHL ||
+          MI.getOpcode() == TargetOpcode::G_LSHR ||
+          MI.getOpcode() == TargetOpcode::G_ASHR) &&
+         "Unexpected opcode");
+  MachineRegisterInfo &MRI = *Helper.MIRBuilder.getMRI();
+  Register DstReg = MI.getOperand(0).getReg();
+  LLT Ty = MRI.getType(DstReg);
+  if (auto Amt =
+          getConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI)) {
+    if (Ty == LLT::scalar(8) && Amt->Value == 1)
+      return LegalizerHelper::AlreadyLegal;
+    if (MI.getOpcode() == TargetOpcode::G_SHL && Amt->Value == 1) {
+      Helper.Observer.changingInstr(MI);
+      MI.setDesc(Helper.MIRBuilder.getTII().get(TargetOpcode::G_ADD));
+      MI.getOperand(2).setReg(MI.getOperand(1).getReg());
+      Helper.Observer.changedInstr(MI);
+      return LegalizerHelper::Legalized;
+    }
+    if (MI.getOpcode() == TargetOpcode::G_ASHR &&
+        Amt->Value == Ty.getSizeInBits() - 1 &&
+        (Ty == LLT::scalar(8) || Ty == LLT::scalar(16) ||
+         (Subtarget.is24Bit() && Ty == LLT::scalar(24))))
+      return LegalizerHelper::Legalized;
+  }
+  return Helper.libcall(MI);
+}
+
+LegalizerHelper::LegalizeResult
 Z80LegalizerInfo::legalizeFunnelShift(LegalizerHelper &Helper,
                                       MachineInstr &MI) const {
   assert((MI.getOpcode() == TargetOpcode::G_FSHL ||
@@ -283,6 +323,9 @@ Z80LegalizerInfo::legalizeFunnelShift(LegalizerHelper &Helper,
   Register RevReg = MI.getOperand(2).getReg();
   Register AmtReg = MI.getOperand(3).getReg();
   LLT Ty = MRI.getType(DstReg);
+  if (auto Amt = getConstantVRegValWithLookThrough(AmtReg, MRI))
+    if (Ty == LLT::scalar(8) && (Amt->Value == 1 || Amt->Value == 7))
+        return LegalizerHelper::AlreadyLegal;
 
   unsigned FwdShiftOpc = TargetOpcode::G_SHL;
   unsigned RevShiftOpc = TargetOpcode::G_LSHR;
