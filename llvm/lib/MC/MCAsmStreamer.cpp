@@ -63,6 +63,12 @@ class MCAsmStreamer final : public MCStreamer {
   void emitCFIStartProcImpl(MCDwarfFrameInfo &Frame) override;
   void emitCFIEndProcImpl(MCDwarfFrameInfo &Frame) override;
 
+  void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                               StringRef Filename,
+                               Optional<MD5::MD5Result> Checksum,
+                               Optional<StringRef> Source,
+                               bool UseDwarfDirectory, raw_svector_ostream &OS);
+
 public:
   MCAsmStreamer(MCContext &Context, std::unique_ptr<formatted_raw_ostream> os,
                 bool isVerboseAsm, bool useDwarfDirectory,
@@ -626,9 +632,9 @@ void MCAsmStreamer::emitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
     if (E->inlineAssignedExpr())
       EmitSet = false;
   if (EmitSet) {
-    OS << ".set ";
+    OS << MAI->getSetDirective();
     Symbol->print(OS, MAI);
-    OS << ", ";
+    OS << MAI->getSetSeparator();
     Value->print(OS, MAI);
 
     EmitEOL();
@@ -676,7 +682,9 @@ bool MCAsmStreamer::emitSymbolAttribute(MCSymbol *Symbol,
   case MCSA_Global: // .globl/.global
     OS << MAI->getGlobalDirective();
     break;
-  case MCSA_LGlobal:        OS << "\t.lglobl\t";          break;
+  case MCSA_LGlobal: // .lglobl
+    OS << MAI->getLGloblDirective();
+    break;
   case MCSA_Hidden:         OS << "\t.hidden\t";          break;
   case MCSA_IndirectSymbol: OS << "\t.indirect_symbol\t"; break;
   case MCSA_Internal:       OS << "\t.internal\t";        break;
@@ -981,24 +989,42 @@ void MCAsmStreamer::emitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,
 }
 
 static inline char toOctal(int X) { return (X&7)+'0'; }
+static inline void PrintOctal(unsigned char C, raw_ostream &OS) {
+  OS << toOctal(C >> 6);
+  OS << toOctal(C >> 3);
+  OS << toOctal(C >> 0);
+}
+
+static void PrintOctalLiteral(unsigned char C, raw_ostream &OS,
+                              MCAsmInfo::AsmOctalLiteralSyntax AOLS) {
+  switch (AOLS) {
+  case MCAsmInfo::AOLS_Unknown:
+    OS << (unsigned)C; // Fallback to decimal.
+    return;
+  case MCAsmInfo::AOLS_LeadingZero:
+    OS << '0';
+    PrintOctal(C, OS);
+    return;
+  case MCAsmInfo::AOLS_TrailingO:
+    PrintOctal(C, OS);
+    OS << 'o';
+    return;
+  }
+  llvm_unreachable("Invalid AsmOctalLiteralSyntax value!");
+}
 
 static void PrintByteList(StringRef Data, raw_ostream &OS,
+                          MCAsmInfo::AsmOctalLiteralSyntax AOLS,
                           MCAsmInfo::AsmCharLiteralSyntax ACLS) {
   assert(!Data.empty() && "Cannot generate an empty list.");
-  const auto printCharacterInOctal = [&OS](unsigned char C) {
-    OS << '0';
-    OS << toOctal(C >> 6);
-    OS << toOctal(C >> 3);
-    OS << toOctal(C >> 0);
-  };
-  const auto printOneCharacterFor = [printCharacterInOctal](
-                                        auto printOnePrintingCharacter) {
-    return [printCharacterInOctal, printOnePrintingCharacter](unsigned char C) {
+  const auto printOneCharacterFor = [&OS,
+                                     AOLS](auto printOnePrintingCharacter) {
+    return [&OS, AOLS, printOnePrintingCharacter](unsigned char C) {
       if (isPrint(C)) {
         printOnePrintingCharacter(static_cast<char>(C));
         return;
       }
-      printCharacterInOctal(C);
+      PrintOctalLiteral(C, OS, AOLS);
     };
   };
   const auto printCharacterList = [Data, &OS](const auto &printOneCharacter) {
@@ -1011,7 +1037,8 @@ static void PrintByteList(StringRef Data, raw_ostream &OS,
   };
   switch (ACLS) {
   case MCAsmInfo::ACLS_Unknown:
-    printCharacterList(printCharacterInOctal);
+    printCharacterList(
+        [&OS, AOLS](unsigned char C) { PrintOctalLiteral(C, OS, AOLS); });
     return;
   case MCAsmInfo::ACLS_SingleQuotePrefix:
     printCharacterList(printOneCharacterFor([&OS](char C) {
@@ -1019,26 +1046,38 @@ static void PrintByteList(StringRef Data, raw_ostream &OS,
       OS << StringRef(AsmCharLitBuf, sizeof(AsmCharLitBuf));
     }));
     return;
+  case MCAsmInfo::ACLS_SingleQuotes:
+    printCharacterList(printOneCharacterFor([&OS](char C) {
+      const char AsmCharLitBuf[4] = {'\'', C, '\'', '\''};
+      OS << StringRef(AsmCharLitBuf, sizeof(AsmCharLitBuf) - (C != '\''));
+    }));
+    return;
   }
   llvm_unreachable("Invalid AsmCharLiteralSyntax value!");
 }
 
-static void PrintQuotedString(StringRef Data, raw_ostream &OS) {
+static void PrintQuotedString(StringRef Data, raw_ostream &OS,
+                              MCAsmInfo::AsmOctalLiteralSyntax AOLS,
+                              MCAsmInfo::AsmStringLiteralEscapeSyntax ASLES) {
   OS << '"';
 
+  bool NeedTrailingQuote = true;
   for (unsigned i = 0, e = Data.size(); i != e; ++i) {
     unsigned char C = Data[i];
-    if (C == '"' || C == '\\') {
-      OS << '\\' << (char)C;
-      continue;
-    }
 
-    if (isPrint((unsigned char)C)) {
-      OS << (char)C;
-      continue;
-    }
+    switch (ASLES) {
+    case MCAsmInfo::ASLES_BackslashEscapes:
+      if (C == '"' || C == '\\') {
+        OS << '\\' << (char)C;
+        continue;
+      }
 
-    switch (C) {
+      if (isPrint(C)) {
+        OS << (char)C;
+        continue;
+      }
+
+      switch (C) {
       case '\b': OS << "\\b"; break;
       case '\f': OS << "\\f"; break;
       case '\n': OS << "\\n"; break;
@@ -1046,14 +1085,34 @@ static void PrintQuotedString(StringRef Data, raw_ostream &OS) {
       case '\t': OS << "\\t"; break;
       default:
         OS << '\\';
-        OS << toOctal(C >> 6);
-        OS << toOctal(C >> 3);
-        OS << toOctal(C >> 0);
+        PrintOctal(C, OS);
         break;
+      }
+      continue;
+    case MCAsmInfo::ASLES_RepeatDelimiter:
+      if (isPrint(C)) {
+        if (!NeedTrailingQuote)
+          OS << ",\"";
+        if (C == '"')
+          OS << (char)C;
+        OS << (char)C;
+        NeedTrailingQuote = true;
+        continue;
+      }
+
+      if (NeedTrailingQuote)
+        OS << '"';
+      OS << ',';
+      PrintOctalLiteral(C, OS, AOLS);
+      NeedTrailingQuote = false;
+      continue;
     }
+
+    llvm_unreachable("Invalid AsmStringLiteralEscapeSyntax value!");
   }
 
-  OS << '"';
+  if (NeedTrailingQuote)
+    OS << '"';
 }
 
 void MCAsmStreamer::emitBytes(StringRef Data) {
@@ -1071,14 +1130,16 @@ void MCAsmStreamer::emitBytes(StringRef Data) {
       OS << MAI->getAsciiDirective();
     } else if (MAI->getByteListDirective()) {
       OS << MAI->getByteListDirective();
-      PrintByteList(Data, OS, MAI->characterLiteralSyntax());
+      PrintByteList(Data, OS, MAI->octalLiteralSyntax(),
+                    MAI->characterLiteralSyntax());
       EmitEOL();
       return true;
     } else {
       return false;
     }
 
-    PrintQuotedString(Data, OS);
+    PrintQuotedString(Data, OS, MAI->octalLiteralSyntax(),
+                      MAI->stringLiteralEscapeSyntax());
     EmitEOL();
     return true;
   };
@@ -1191,7 +1252,7 @@ void MCAsmStreamer::emitULEB128Value(const MCExpr *Value) {
     emitULEB128IntValue(IntValue);
     return;
   }
-  OS << "\t.uleb128 ";
+  OS << MAI->getDataULEB128Directive();
   Value->print(OS, MAI);
   EmitEOL();
 }
@@ -1202,7 +1263,7 @@ void MCAsmStreamer::emitSLEB128Value(const MCExpr *Value) {
     emitSLEB128IntValue(IntValue);
     return;
   }
-  OS << "\t.sleb128 ";
+  OS << MAI->getDataSLEB128Directive();
   Value->print(OS, MAI);
   EmitEOL();
 }
@@ -1279,7 +1340,7 @@ void MCAsmStreamer::emitFill(const MCExpr &NumBytes, uint64_t FillValue,
   if (const char *BlockDirective = MAI->getBlockDirective(1)) {
     OS << BlockDirective;
     NumBytes.print(OS, MAI);
-    OS << ", " << FillValue;
+    OS << MAI->getBlockSeparator() << FillValue;
     EmitEOL();
     return;
   }
@@ -1379,16 +1440,15 @@ void MCAsmStreamer::emitValueToOffset(const MCExpr *Offset,
 void MCAsmStreamer::emitFileDirective(StringRef Filename) {
   assert(MAI->hasSingleParameterDotFile());
   OS << "\t.file\t";
-  PrintQuotedString(Filename, OS);
+  PrintQuotedString(Filename, OS, MAI->octalLiteralSyntax(),
+                    MAI->stringLiteralEscapeSyntax());
   EmitEOL();
 }
 
-static void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
-                                    StringRef Filename,
-                                    Optional<MD5::MD5Result> Checksum,
-                                    Optional<StringRef> Source,
-                                    bool UseDwarfDirectory,
-                                    raw_svector_ostream &OS) {
+void MCAsmStreamer::printDwarfFileDirective(
+    unsigned FileNo, StringRef Directory, StringRef Filename,
+    Optional<MD5::MD5Result> Checksum, Optional<StringRef> Source,
+    bool UseDwarfDirectory, raw_svector_ostream &OS) {
   SmallString<128> FullPathName;
 
   if (!UseDwarfDirectory && !Directory.empty()) {
@@ -1402,17 +1462,20 @@ static void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
     }
   }
 
-  OS << "\t.file\t" << FileNo << ' ';
+  OS << MAI->getDwarfFileDirective() << FileNo << ' ';
   if (!Directory.empty()) {
-    PrintQuotedString(Directory, OS);
+    PrintQuotedString(Directory, OS, MAI->octalLiteralSyntax(),
+                      MAI->stringLiteralEscapeSyntax());
     OS << ' ';
   }
-  PrintQuotedString(Filename, OS);
+  PrintQuotedString(Filename, OS, MAI->octalLiteralSyntax(),
+                    MAI->stringLiteralEscapeSyntax());
   if (Checksum)
     OS << " md5 0x" << Checksum->digest();
   if (Source) {
     OS << " source ";
-    PrintQuotedString(*Source, OS);
+    PrintQuotedString(*Source, OS, MAI->octalLiteralSyntax(),
+                      MAI->stringLiteralEscapeSyntax());
   }
 }
 
@@ -1473,7 +1536,7 @@ void MCAsmStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                           unsigned Column, unsigned Flags,
                                           unsigned Isa, unsigned Discriminator,
                                           StringRef FileName) {
-  OS << "\t.loc\t" << FileNo << " " << Line << " " << Column;
+  OS << MAI->getDwarfLocDirective() << FileNo << " " << Line << " " << Column;
   if (MAI->supportsExtendedDwarfLocDirective()) {
     if (Flags & DWARF2_FLAG_BASIC_BLOCK)
       OS << " basic_block";
@@ -1522,7 +1585,8 @@ bool MCAsmStreamer::EmitCVFileDirective(unsigned FileNo, StringRef Filename,
     return false;
 
   OS << "\t.cv_file\t" << FileNo << ' ';
-  PrintQuotedString(Filename, OS);
+  PrintQuotedString(Filename, OS, MAI->octalLiteralSyntax(),
+                    MAI->stringLiteralEscapeSyntax());
 
   if (!ChecksumKind) {
     EmitEOL();
@@ -1530,7 +1594,8 @@ bool MCAsmStreamer::EmitCVFileDirective(unsigned FileNo, StringRef Filename,
   }
 
   OS << ' ';
-  PrintQuotedString(toHex(Checksum), OS);
+  PrintQuotedString(toHex(Checksum), OS, MAI->octalLiteralSyntax(),
+                    MAI->stringLiteralEscapeSyntax());
   OS << ' ' << ChecksumKind;
 
   EmitEOL();
@@ -1673,9 +1738,10 @@ void MCAsmStreamer::EmitCVFPOData(const MCSymbol *ProcSym, SMLoc L) {
 }
 
 void MCAsmStreamer::emitIdent(StringRef IdentString) {
-  assert(MAI->hasIdentDirective() && ".ident directive not supported");
-  OS << "\t.ident\t";
-  PrintQuotedString(IdentString, OS);
+  assert(MAI->getIdentDirective() && ".ident directive not supported");
+  OS << MAI->getIdentDirective();
+  PrintQuotedString(IdentString, OS, MAI->octalLiteralSyntax(),
+                    MAI->stringLiteralEscapeSyntax());
   EmitEOL();
 }
 

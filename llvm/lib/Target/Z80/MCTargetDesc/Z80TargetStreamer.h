@@ -25,11 +25,17 @@ class Z80TargetStreamer : public MCTargetStreamer {
 public:
   explicit Z80TargetStreamer(MCStreamer &S);
 
+  // label:
+  void emitLabel(MCSymbol *Symbol) override = 0;
+
   // .align
   virtual void emitAlign(Align Alignment) = 0;
 
   // .block
   virtual void emitBlock(uint64_t NumBytes) = 0;
+
+  // .private
+  virtual void emitLocal(MCSymbol *Symbol) = 0;
 
   // .global
   virtual void emitGlobal(MCSymbol *Symbol) = 0;
@@ -45,8 +51,10 @@ class Z80TargetAsmStreamer final : public Z80TargetStreamer {
 public:
   Z80TargetAsmStreamer(MCStreamer &S, formatted_raw_ostream &OS);
 
+  void emitLabel(MCSymbol *Symbol) override;
   void emitAlign(Align Alignment) override;
   void emitBlock(uint64_t NumBytes) override;
+  void emitLocal(MCSymbol *Symbol) override;
   void emitGlobal(MCSymbol *Symbol) override;
   void emitExtern(MCSymbol *Symbol) override;
 };

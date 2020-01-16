@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
@@ -98,7 +99,7 @@ MCSectionMachO::MCSectionMachO(StringRef Segment, StringRef Section,
 void MCSectionMachO::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                                           raw_ostream &OS,
                                           const MCExpr *Subsection) const {
-  OS << "\t.section\t" << getSegmentName() << ',' << getName();
+  OS << MAI.getSectionDirective() << getSegmentName() << ',' << getName();
 
   // Get the section type and attributes.
   unsigned TAA = getTypeAndAttributes();
