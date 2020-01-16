@@ -20,38 +20,51 @@ void Z80MCAsmInfo::anchor() { }
 
 Z80MCAsmInfo::Z80MCAsmInfo(const Triple &T) {
   bool Is16Bit = T.isArch16Bit() || T.getEnvironment() == Triple::CODE16;
-  CodePointerSize = CalleeSaveStackSlotSize = Is16Bit ? 2 : 3;
+  CodePointerSize = CalleeSaveStackSlotSize = Is16Bit ? 2 : 4;
   MaxInstLength = 6;
   DollarIsPC = true;
   SeparatorString = nullptr;
   CommentString = ";";
   PrivateGlobalPrefix = PrivateLabelPrefix = "";
-  Code16Directive = ".assume\tadl = 0";
-  Code24Directive = ".assume\tadl = 1";
+  Code16Directive = "assume\tadl = 0";
+  Code24Directive = "assume\tadl = 1";
   Code32Directive = Code64Directive = nullptr;
   AssemblerDialect = !Is16Bit;
   SupportsQuotedNames = false;
   ZeroDirective = AsciiDirective = AscizDirective = nullptr;
-  Data8bitsDirective = "\tDB\t";
-  Data16bitsDirective = "\tDW\t";
-  Data24bitsDirective = "\tDW24\t";
-  Data32bitsDirective = "\tDL\t";
+  BlockSeparator = " dup ";
+  Data8bitsDirective = "\tdb\t";
+  Data16bitsDirective = "\tdw\t";
+  Data24bitsDirective = "\tdl\t";
+  Data32bitsDirective = "\tdd\t";
   Data64bitsDirective = nullptr;
-  GlobalDirective = "\tXDEF\t";
+  AlwaysChangeSection = true;
+  GlobalDirective = "\tpublic\t";
+  LGloblDirective = "\tprivate\t";
+  SetDirective = "\tlabel\t";
+  SetSeparator = " at ";
   HasFunctionAlignment = false;
   HasDotTypeDotSizeDirective = false;
-  WeakDirective = nullptr;
+  WeakDirective = "\tweak\t";
   UseIntegratedAssembler = false;
-  WeakDirective = nullptr;
   UseLogicalShr = false;
+  HasSingleParameterDotFile = false;
+  DwarfFileDirective = "\tfile\t";
+  DwarfLocDirective = "\tloc\t";
+
+  // Debug Information
+  SupportsDebugInformation = true;
+
+  // Exceptions handling
+  ExceptionsType = ExceptionHandling::SjLj;
 }
 
 const char *Z80MCAsmInfo::getBlockDirective(int64_t Size) const {
   switch (Size) {
   default: return nullptr;
-  case 1: return "\tBLKB\t";
-  case 2: return "\tBLKW\t";
-  case 3: return "\tBLKP\t";
-  case 4: return "\tBLKL\t";
+  case 1: return "\tdb\t";
+  case 2: return "\tdw\t";
+  case 3: return "\tdl\t";
+  case 4: return "\tdd\t";
   }
 }

@@ -42,6 +42,7 @@ MCAsmInfo::MCAsmInfo() {
   Code32Directive = ".code32";
   Code64Directive = ".code64";
   ZeroDirective = "\t.zero\t";
+  BlockSeparator = ", ";
   AsciiDirective = "\t.ascii\t";
   AscizDirective = "\t.asciz\t";
   Data8bitsDirective = "\t.byte\t";
@@ -50,9 +51,13 @@ MCAsmInfo::MCAsmInfo() {
   Data32bitsDirective = "\t.long\t";
   Data64bitsDirective = "\t.quad\t";
   GlobalDirective = "\t.globl\t";
+  SetDirective = ".set ";
+  SetSeparator = ", ";
   WeakDirective = "\t.weak\t";
   if (DwarfExtendedLoc != Default)
     SupportsExtendedDwarfLocDirective = DwarfExtendedLoc == Enable;
+  DwarfFileDirective = "\t.file\t";
+  DwarfLocDirective = "\t.loc\t";
 
   // FIXME: Clang's logic should be synced with the logic used to initialize
   //        this member and the two implementations should be merged.

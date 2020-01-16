@@ -62,6 +62,12 @@ class MCAsmStreamer final : public MCStreamer {
   void emitCFIStartProcImpl(MCDwarfFrameInfo &Frame) override;
   void emitCFIEndProcImpl(MCDwarfFrameInfo &Frame) override;
 
+  void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                               StringRef Filename,
+                               Optional<MD5::MD5Result> Checksum,
+                               Optional<StringRef> Source,
+                               bool UseDwarfDirectory, raw_svector_ostream &OS);
+
 public:
   MCAsmStreamer(MCContext &Context, std::unique_ptr<formatted_raw_ostream> os,
                 bool isVerboseAsm, bool useDwarfDirectory,
@@ -616,9 +622,9 @@ void MCAsmStreamer::emitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
     if (E->inlineAssignedExpr())
       EmitSet = false;
   if (EmitSet) {
-    OS << ".set ";
+    OS << MAI->getSetDirective();
     Symbol->print(OS, MAI);
-    OS << ", ";
+    OS << MAI->getSetSeparator();
     Value->print(OS, MAI);
 
     EmitEOL();
@@ -666,7 +672,9 @@ bool MCAsmStreamer::emitSymbolAttribute(MCSymbol *Symbol,
   case MCSA_Global: // .globl/.global
     OS << MAI->getGlobalDirective();
     break;
-  case MCSA_LGlobal:        OS << "\t.lglobl\t";          break;
+  case MCSA_LGlobal: // .lglobl
+    OS << MAI->getLGloblDirective();
+    break;
   case MCSA_Hidden:         OS << "\t.hidden\t";          break;
   case MCSA_IndirectSymbol: OS << "\t.indirect_symbol\t"; break;
   case MCSA_Internal:       OS << "\t.internal\t";        break;
@@ -1219,7 +1227,7 @@ void MCAsmStreamer::emitFill(const MCExpr &NumBytes, uint64_t FillValue,
   if (const char *BlockDirective = MAI->getBlockDirective(1)) {
     OS << BlockDirective;
     NumBytes.print(OS, MAI);
-    OS << ", " << FillValue;
+    OS << MAI->getBlockSeparator() << FillValue;
     EmitEOL();
     return;
   }
@@ -1323,12 +1331,10 @@ void MCAsmStreamer::emitFileDirective(StringRef Filename) {
   EmitEOL();
 }
 
-static void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
-                                    StringRef Filename,
-                                    Optional<MD5::MD5Result> Checksum,
-                                    Optional<StringRef> Source,
-                                    bool UseDwarfDirectory,
-                                    raw_svector_ostream &OS) {
+void MCAsmStreamer::printDwarfFileDirective(
+    unsigned FileNo, StringRef Directory, StringRef Filename,
+    Optional<MD5::MD5Result> Checksum, Optional<StringRef> Source,
+    bool UseDwarfDirectory, raw_svector_ostream &OS) {
   SmallString<128> FullPathName;
 
   if (!UseDwarfDirectory && !Directory.empty()) {
@@ -1342,7 +1348,7 @@ static void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
     }
   }
 
-  OS << "\t.file\t" << FileNo << ' ';
+  OS << MAI->getDwarfFileDirective() << FileNo << ' ';
   if (!Directory.empty()) {
     PrintQuotedString(Directory, OS);
     OS << ' ';
@@ -1413,7 +1419,7 @@ void MCAsmStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                           unsigned Column, unsigned Flags,
                                           unsigned Isa, unsigned Discriminator,
                                           StringRef FileName) {
-  OS << "\t.loc\t" << FileNo << " " << Line << " " << Column;
+  OS << MAI->getDwarfLocDirective() << FileNo << " " << Line << " " << Column;
   if (MAI->supportsExtendedDwarfLocDirective()) {
     if (Flags & DWARF2_FLAG_BASIC_BLOCK)
       OS << " basic_block";

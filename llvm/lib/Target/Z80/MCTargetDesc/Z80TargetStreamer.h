@@ -31,6 +31,9 @@ public:
   // .block
   virtual void emitBlock(uint64_t NumBytes) = 0;
 
+  // .private
+  virtual void emitLocal(MCSymbol *Symbol) = 0;
+
   // .global
   virtual void emitGlobal(MCSymbol *Symbol) = 0;
 
@@ -47,6 +50,7 @@ public:
 
   void emitAlign(Align Alignment) override;
   void emitBlock(uint64_t NumBytes) override;
+  void emitLocal(MCSymbol *Symbol) override;
   void emitGlobal(MCSymbol *Symbol) override;
   void emitExtern(MCSymbol *Symbol) override;
 };
