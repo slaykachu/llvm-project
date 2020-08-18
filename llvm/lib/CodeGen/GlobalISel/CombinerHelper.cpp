@@ -3370,6 +3370,140 @@ bool CombinerHelper::applyCombineIdentity(MachineInstr &MI) {
   return true;
 }
 
+bool CombinerHelper::matchNarrowOp(MachineInstr &MI) {
+  if (MI.getOpcode() != TargetOpcode::G_TRUNC)
+    return false;
+
+  auto &MF = *MI.getParent()->getParent();
+  const auto &TLI = *MF.getSubtarget().getTargetLowering();
+
+  LLT NarrowTy = MRI.getType(MI.getOperand(0).getReg());
+  Register OpReg = MI.getOperand(1).getReg();
+  MachineInstr *OpMI = getDefIgnoringCopies(OpReg, MRI);
+  if (!MRI.hasOneUse(OpReg) || !OpMI)
+    return false;
+
+  switch (unsigned Opc = OpMI->getOpcode()) {
+  case TargetOpcode::G_ADD:
+  case TargetOpcode::G_SUB:
+  case TargetOpcode::G_MUL:
+  case TargetOpcode::G_AND:
+  case TargetOpcode::G_OR:
+  case TargetOpcode::G_XOR:
+  case TargetOpcode::G_LOAD:
+  case TargetOpcode::G_SEXTLOAD:
+  case TargetOpcode::G_ZEXTLOAD:
+    return TLI.isTypeDesirableForGOp(Opc, NarrowTy);
+  default:
+    return false;
+  }
+}
+
+void CombinerHelper::applyNarrowOp(MachineInstr &MI) {
+  assert(MI.getOpcode() == TargetOpcode::G_TRUNC && "Expected a G_TRUNC");
+
+  Register TruncReg = MI.getOperand(0).getReg();
+  LLT NarrowTy = MRI.getType(TruncReg);
+  Register OpReg = MI.getOperand(1).getReg();
+  MachineInstr &OpMI = *getDefIgnoringCopies(OpReg, MRI);
+
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
+
+  Builder.setInstr(OpMI);
+  Observer.changingInstr(OpMI);
+  OpMI.getOperand(0).setReg(TruncReg);
+  if (OpMI.mayLoad()) {
+    assert(OpMI.hasOneMemOperand() &&
+           "Expected generic load to have exactly one MMO.");
+    MachineFunction &MF = Builder.getMF();
+    OpMI.setMemRefs(MF, MF.getMachineMemOperand(*OpMI.memoperands_begin(), 0,
+                                                NarrowTy.getSizeInBytes()));
+  } else
+    for (auto &MO : OpMI.explicit_uses())
+      if (MO.isReg())
+        MO.setReg(Builder.buildTrunc(NarrowTy, MO.getReg()).getReg(0));
+  Observer.changedInstr(OpMI);
+}
+
+bool CombinerHelper::matchNarrowCompare(MachineInstr &MI, unsigned &ShiftAmt) {
+  if (MI.getOpcode() != TargetOpcode::G_ICMP)
+    return false;
+
+  auto Pred = CmpInst::Predicate(MI.getOperand(1).getPredicate());
+  assert(CmpInst::isIntPredicate(Pred) &&
+         "Expected G_ICMP to have an int pred.");
+  bool EqRes = Pred == CmpInst::ICMP_EQ || CmpInst::isNonStrictPredicate(Pred);
+
+  Register LHSReg = MI.getOperand(2).getReg();
+  Register RHSReg = MI.getOperand(3).getReg();
+  LLT Ty = MRI.getType(LHSReg);
+  if (Ty.isVector())
+    return false;
+
+  if (LHSReg == RHSReg) {
+    MatchInfo.Ty = LLT();
+    MatchInfo.Imm = EqRes;
+    return true;
+  }
+
+  KnownBits KnownNotEqual = KB->getKnownBits(LHSReg) ^ KB->getKnownBits(RHSReg);
+  if (KnownNotEqual.isZero()) {
+    MatchInfo.Ty = LLT();
+    MatchInfo.Imm = EqRes;
+    return true;
+  }
+  if (KnownNotEqual.isNonZero()) {
+    MatchInfo.Ty = LLT();
+    MatchInfo.Imm = !EqRes;
+    return true;
+  }
+
+  if (CmpInst::isSigned(Pred))
+    return false;
+
+  unsigned Width = 8;
+  if (Width >= KnownEqual.getBitWidth())
+    return false;
+  for (ShiftAmt = 0; ShiftAmt < KnownEqual.getBitWidth(); ShiftAmt += Width)
+    if ((KnownNotEqual.Zero | APInt::getBitsSet(KnownEqual.getBitWidth(),
+                                                ShiftAmt, ShiftAmt + Width))
+            .isAllOnesValue())
+      return true;
+
+  return false;
+}
+
+void CombinerHelper::applyNarrowCompare(MachineInstr &MI, unsigned ShiftAmt) {
+  assert(MI.getOpcode() == TargetOpcode::G_ICMP && "Expected a G_ICMP");
+  Builder.setInstrAndDebugLoc(MI);
+
+  if (!MatchInfo.Ty.isValid()) {
+    Builder.buildConstant(MI.getOperand(0).getReg(), MatchInfo.Imm);
+
+    Observer.erasingInstr(MI);
+    MI.eraseFromParent();
+    return;
+  }
+
+  Observer.changingInstr(MI);
+  for (auto &MO : MI.explicit_uses()) {
+    if (!MO.isReg())
+      continue;
+    Register Reg = MO.getReg();
+    LLT Ty = MRI.getType(Reg);
+    if (Ty.isPointer()) {
+      Ty = LLT::scalar(Ty.getSizeInBits());
+      Reg = Builder.buildPtrToInt(Ty, Reg).getReg(0);
+    }
+    if (MatchInfo.Imm)
+      Reg = Builder.buildLShr(Ty, Reg, Builder.buildConstant(Ty, MatchInfo.Imm))
+                .getReg(0);
+    MO.setReg(Builder.buildTrunc(MatchInfo.Ty, Reg).getReg(0));
+  }
+  Observer.changedInstr(MI);
+}
+
 bool CombinerHelper::matchSplitConditions(MachineInstr &MI) {
   if (MI.getOpcode() != TargetOpcode::G_BRCOND)
     return false;

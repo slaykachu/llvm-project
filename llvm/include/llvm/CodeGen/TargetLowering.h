@@ -30,6 +30,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/DAGCombine.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/CodeGen/LowLevelType.h"
 #include "llvm/CodeGen/RuntimeLibcalls.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -3565,6 +3566,15 @@ public:
   virtual bool isTypeDesirableForOp(unsigned /*Opc*/, EVT VT) const {
     // By default, assume all legal types are desirable.
     return isTypeLegal(VT);
+  }
+
+  /// Return true if the target has native support for the specified value type
+  /// and it is 'desirable' to use the type for the given generic opcode. e.g.
+  /// On x86 i16 is legal, but undesirable since i16 instruction encodings are
+  /// longer and some i16 instructions are slow.
+  virtual bool isTypeDesirableForGOp(unsigned /*Opc*/, LLT Ty) const {
+    // By default, assume all legal types are desirable.
+    return isTypeLegal(getMVTForLLT(Ty));
   }
 
   /// Return true if it is profitable for dag combiner to transform a floating
