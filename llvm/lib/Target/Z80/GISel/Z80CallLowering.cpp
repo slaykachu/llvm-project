@@ -626,7 +626,7 @@ bool Z80CallLowering::lowerTailCall(MachineIRBuilder &MIRBuilder,
   if (Info.Callee.isReg())
     MIB->getOperand(0).setReg(constrainOperandRegClass(
         MF, TRI, MRI, TII, *MF.getSubtarget().getRegBankInfo(), *MIB,
-        MIB->getDesc(), Info.Callee, 0));
+        Info.Callee, 0));
 
   MF.getFrameInfo().setHasTailCall();
   Info.LoweredTailCall = true;
@@ -716,7 +716,7 @@ bool Z80CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   if (Info.Callee.isReg())
     MIB->getOperand(0).setReg(constrainOperandRegClass(
         MF, TRI, MRI, TII, *MF.getSubtarget().getRegBankInfo(), *MIB,
-        MIB->getDesc(), Info.Callee, 0));
+        Info.Callee, 0));
 
   // Finally we can copy the returned value back into its virtual-register. In
   // symmetry with the arguments, the physical register must be an

@@ -52,8 +52,8 @@ Register constrainRegToClass(MachineRegisterInfo &MRI,
 /// Constrain the Register operand OpIdx, so that it is now constrained to the
 /// TargetRegisterClass passed as an argument (RegClass).
 /// If this fails, create a new virtual register in the correct class and
-/// insert a COPY before \p InsertPt if it is a use or after if it is a
-/// definition. The debug location of \p InsertPt is used for the new copy.
+/// insert a COPY before \p I if it is a use or after if it is a definition.
+/// The debug location of \p I is used for the new copy.
 ///
 /// \return The virtual register constrained to the right register class.
 Register constrainOperandRegClass(const MachineFunction &MF,
@@ -78,8 +78,7 @@ Register constrainOperandRegClass(const MachineFunction &MF,
                                   const TargetRegisterInfo &TRI,
                                   MachineRegisterInfo &MRI,
                                   const TargetInstrInfo &TII,
-                                  const RegisterBankInfo &RBI,
-                                  MachineInstr &InsertPt, const MCInstrDesc &II,
+                                  const RegisterBankInfo &RBI, MachineInstr &I,
                                   const MachineOperand &RegMO, unsigned OpIdx);
 
 /// Mutate the newly-selected instruction \p I to constrain its (possibly
