@@ -41,6 +41,8 @@ public:
 private:
   LegalizerHelper::LegalizeResult legalizeBitwise(LegalizerHelper &Helper,
                                                   MachineInstr &MI) const;
+  LegalizerHelper::LegalizeResult legalizeExtractInsert(LegalizerHelper &Helper,
+                                                        MachineInstr &MI) const;
   LegalizerHelper::LegalizeResult legalizeFConstant(LegalizerHelper &Helper,
                                                     MachineInstr &MI) const;
   LegalizerHelper::LegalizeResult legalizeVAStart(LegalizerHelper &Helper,
