@@ -415,6 +415,9 @@ public:
   /// Replace an instruction with a G_CONSTANT with value \p C.
   bool replaceInstWithConstant(MachineInstr &MI, int64_t C);
 
+  /// Replace an instruction with a G_CONSTANT with value \p C.
+  bool replaceInstWithConstant(MachineInstr &MI, APInt C);
+
   /// Replace an instruction with a G_IMPLICIT_DEF.
   bool replaceInstWithUndef(MachineInstr &MI);
 
@@ -511,6 +514,8 @@ public:
   /// Undo combines involving popcnt.
   bool matchLowerIsPowerOfTwo(MachineInstr &MI);
   void applyLowerIsPowerOfTwo(MachineInstr &MI);
+
+  bool matchKnownConstant(MachineInstr &MI, APInt &Const);
 
   bool matchSinkConstant(MachineInstr &MI, MachineInstr *&DomUseMI);
   void applySinkConstant(MachineInstr &MI, MachineInstr &DomUseMI);

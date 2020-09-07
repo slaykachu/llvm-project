@@ -133,7 +133,7 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
       .clampScalar(1, s8, s8)
       .clampScalar(0, s8, s64);
 
-  getActionDefinitionsBuilder({G_FSHL, G_FSHR})
+  getActionDefinitionsBuilder({G_FSHL, G_FSHR, G_MEMCPY, G_MEMMOVE, G_MEMSET})
       .custom();
 
   getActionDefinitionsBuilder({G_FADD, G_FSUB, G_FMUL, G_FDIV, G_FREM, G_FNEG,
@@ -213,7 +213,7 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
 LegalizerHelper::LegalizeResult
 Z80LegalizerInfo::legalizeCustomMaybeLegal(LegalizerHelper &Helper,
                                            MachineInstr &MI) const {
-  Helper.MIRBuilder.setInstr(MI);
+  Helper.MIRBuilder.setInstrAndDebugLoc(MI);
   switch (MI.getOpcode()) {
   default:
     // No idea what to do.
@@ -238,6 +238,10 @@ Z80LegalizerInfo::legalizeCustomMaybeLegal(LegalizerHelper &Helper,
   case G_ICMP:
   case G_FCMP:
     return legalizeCompare(Helper, MI);
+  case G_MEMCPY:
+  case G_MEMMOVE:
+  case G_MEMSET:
+    return legalizeMemIntrinsic(Helper, MI);
   }
 }
 
@@ -434,42 +438,49 @@ Z80LegalizerInfo::legalizeCompare(LegalizerHelper &Helper,
   return LegalizerHelper::Legalized;
 }
 
-bool Z80LegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
-                                         MachineInstr &MI) const {
+LegalizerHelper::LegalizeResult
+Z80LegalizerInfo::legalizeMemIntrinsic(LegalizerHelper &Helper,
+                                       MachineInstr &MI) const {
   MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
-  MachineFunction &MF = MIRBuilder.getMF();
+  MIRBuilder.setInstrAndDebugLoc(MI);
   MachineRegisterInfo &MRI = *MIRBuilder.getMRI();
-  auto &Ctx = MF.getFunction().getContext();
-  auto &CLI = *MF.getSubtarget().getCallLowering();
+  MachineFunction &MF = MIRBuilder.getMF();
+  const DataLayout &DL = MF.getDataLayout();
   bool Is24Bit = Subtarget.is24Bit();
-  MIRBuilder.setInstr(MI);
-  switch (auto IntrinsicID = Intrinsic::ID(MI.getIntrinsicID())) {
-  case Intrinsic::memcpy:
-  case Intrinsic::memset:
-  case Intrinsic::memmove: {
-    Register DstReg = MI.getOperand(1).getReg();
-    LLT DstTy = MRI.getType(DstReg);
-    Register SrcReg = MI.getOperand(2).getReg();
-    Register LenReg = MI.getOperand(3).getReg();
-    LLT LenTy = LLT::scalar(Is24Bit ? 24 : 16);
-    LenReg = MIRBuilder.buildZExtOrTrunc(LenTy, LenReg).getReg(0);
-    // We need to make sure the number of bytes is non-zero for this lowering to
-    // be correct.  Since we only need to lower constant-length intrinsics for
-    // now, just support those.
-    if (auto Len = getConstantVRegVal(LenReg, MRI)) {
-      // Doing something with zero bytes is a noop anyway.
-      if (!*Len)
-        break;
-      if (MF.getFunction().hasOptSize() && IntrinsicID == Intrinsic::memmove)
-        // Lowering memmove generates a lot of code...
-        goto MemLibcall;
-      if (IntrinsicID == Intrinsic::memset) {
+
+  unsigned Opc = MI.getOpcode();
+  assert((Opc == G_MEMCPY || Opc == G_MEMMOVE || Opc == G_MEMSET) &&
+         "Unexpected opcode");
+
+  Register DstReg = MI.getOperand(0).getReg();
+  LLT DstTy = MRI.getType(DstReg);
+
+  Register SrcReg = MI.getOperand(1).getReg();
+
+  Register LenReg = MI.getOperand(2).getReg();
+  LLT LenTy = LLT::scalar(DL.getIndexSizeInBits(DstTy.getAddressSpace()));
+  LenReg = MIRBuilder.buildZExtOrTrunc(LenTy, LenReg).getReg(0);
+
+  // We need to make sure the number of bytes is non-zero for this lowering to
+  // be correct.  Since we only need to lower constant-length intrinsics for
+  // now, just support those.
+  if (auto ConstLen = getConstantVRegVal(LenReg, MRI)) {
+    // Doing something with zero bytes is a noop anyway.
+    if (!*ConstLen) {
+      MI.eraseFromParent();
+      return LegalizerHelper::Legalized;
+    }
+    // Lowering memmove generates a lot of code...
+    if (!MF.getFunction().hasOptSize() || Opc != TargetOpcode::G_MEMMOVE) {
+      if (Opc == TargetOpcode::G_MEMSET) {
         // Store the first byte.
-        MIRBuilder.buildStore(SrcReg, DstReg, **MI.memoperands_begin());
+        MIRBuilder.buildStore(SrcReg, DstReg, *MI.memoperands().front());
         // If we are only storing one byte, we are done now.
         // TODO: lower small len to a series of stores.
-        if (*Len == 1)
-          break;
+        if (*ConstLen == 1) {
+          MI.eraseFromParent();
+          return LegalizerHelper::Legalized;
+        }
         // Read starting at the stored byte.
         SrcReg = DstReg;
         // Write starting at the following byte.
@@ -482,10 +493,11 @@ bool Z80LegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
         LenReg = MIRBuilder.buildAdd(LenTy, LenReg, NegOne).getReg(0);
         // Now it's just an ldir.
       }
+
       Register DE = Is24Bit ? Z80::UDE : Z80::DE;
       Register HL = Is24Bit ? Z80::UHL : Z80::HL;
       Register BC = Is24Bit ? Z80::UBC : Z80::BC;
-      if (IntrinsicID == Intrinsic::memmove) {
+      if (Opc == TargetOpcode::G_MEMMOVE) {
         MIRBuilder.buildCopy(HL, SrcReg);
         MIRBuilder.buildInstr(Is24Bit ? Z80::CP24ao : Z80::CP16ao, {},
                               {DstReg});
@@ -499,15 +511,26 @@ bool Z80LegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
         MIRBuilder.buildInstr(Is24Bit ? Z80::LDIR24 : Z80::LDIR16)
             .cloneMemRefs(MI);
       }
-      break;
+      MI.eraseFromParent();
+      return LegalizerHelper::Legalized;
     }
-  MemLibcall:
-    MI.getOperand(3).setReg(LenReg);
-    if (createMemLibcall(MIRBuilder, MRI, MI) ==
-        LegalizerHelper::UnableToLegalize)
-      return false;
-    break;
   }
+
+  MI.getOperand(2).setReg(LenReg);
+  auto Result = createMemLibcall(MIRBuilder, MRI, MI);
+  MI.eraseFromParent();
+  return Result;
+}
+
+bool Z80LegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
+                                         MachineInstr &MI) const {
+  MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
+  MIRBuilder.setInstrAndDebugLoc(MI);
+  MachineFunction &MF = MIRBuilder.getMF();
+  auto &Ctx = MF.getFunction().getContext();
+  auto &CLI = *MF.getSubtarget().getCallLowering();
+
+  switch (MI.getIntrinsicID()) {
   case Intrinsic::trap: {
     CallLowering::CallLoweringInfo Info;
     Info.CallConv = CallingConv::C;
@@ -520,6 +543,7 @@ bool Z80LegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
   default:
     return false;
   }
+
   MI.eraseFromParent();
   return true;
 }
