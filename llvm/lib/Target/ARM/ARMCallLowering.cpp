@@ -532,7 +532,7 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder, CallLoweringInfo &
       unsigned CalleeIdx = IsThumb ? 2 : 0;
       MIB->getOperand(CalleeIdx).setReg(constrainOperandRegClass(
           MF, *TRI, MRI, *STI.getInstrInfo(), *STI.getRegBankInfo(),
-          *MIB.getInstr(), MIB->getDesc(), Info.Callee, CalleeIdx));
+          *MIB.getInstr(), Info.Callee, CalleeIdx));
     }
   }
 

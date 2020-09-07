@@ -84,13 +84,13 @@ Register llvm::constrainOperandRegClass(
 Register llvm::constrainOperandRegClass(
     const MachineFunction &MF, const TargetRegisterInfo &TRI,
     MachineRegisterInfo &MRI, const TargetInstrInfo &TII,
-    const RegisterBankInfo &RBI, MachineInstr &InsertPt, const MCInstrDesc &II,
-    const MachineOperand &RegMO, unsigned OpIdx) {
+    const RegisterBankInfo &RBI, MachineInstr &I, const MachineOperand &RegMO,
+    unsigned OpIdx) {
   Register Reg = RegMO.getReg();
   // Assume physical registers are properly constrained.
   assert(Register::isVirtualRegister(Reg) && "PhysReg not implemented");
 
-  const TargetRegisterClass *RegClass = TII.getRegClass(II, OpIdx, &TRI, MF);
+  const TargetRegisterClass *RegClass = I.getRegClassConstraint(OpIdx, &TII, &TRI);
   // Some of the target independent instructions, like COPY, may not impose any
   // register class constraints on some of their operands: If it's a use, we can
   // skip constraining as the instruction defining the register would constrain
@@ -103,7 +103,7 @@ Register llvm::constrainOperandRegClass(
     RegClass = TRI.getConstrainedRegClassForOperand(RegMO, MRI);
 
   if (!RegClass) {
-    assert((!isTargetSpecificOpcode(II.getOpcode()) || RegMO.isUse()) &&
+    assert((!isTargetSpecificOpcode(I.getOpcode()) || RegMO.isUse()) &&
            "Register class constraint is required unless either the "
            "instruction is target independent or the operand is a use");
     // FIXME: Just bailing out like this here could be not enough, unless we
@@ -118,8 +118,7 @@ Register llvm::constrainOperandRegClass(
     // and they never reach this function.
     return Reg;
   }
-  return constrainOperandRegClass(MF, TRI, MRI, TII, RBI, InsertPt, *RegClass,
-                                  RegMO);
+  return constrainOperandRegClass(MF, TRI, MRI, TII, RBI, I, *RegClass, RegMO);
 }
 
 bool llvm::constrainSelectedInstRegOperands(MachineInstr &I,
@@ -155,8 +154,7 @@ bool llvm::constrainSelectedInstRegOperands(MachineInstr &I,
     // If the operand is a vreg, we should constrain its regclass, and only
     // insert COPYs if that's impossible.
     // constrainOperandRegClass does that for us.
-    MO.setReg(constrainOperandRegClass(MF, TRI, MRI, TII, RBI, I, I.getDesc(),
-                                       MO, OpI));
+    MO.setReg(constrainOperandRegClass(MF, TRI, MRI, TII, RBI, I, MO, OpI));
 
     // Tie uses to defs as indicated in MCInstrDesc if this hasn't already been
     // done.

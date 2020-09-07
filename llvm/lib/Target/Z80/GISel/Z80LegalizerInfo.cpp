@@ -192,10 +192,10 @@ Z80LegalizerInfo::Z80LegalizerInfo(const Z80Subtarget &STI,
       .legalForCartesianProduct(LegalTypes, {s1})
       .clampScalar(0, s8, sMax);
 
-  getActionDefinitionsBuilder({G_ABS, G_DYN_STACKALLOC, G_CTLZ_ZERO_UNDEF,
-                               G_CTTZ_ZERO_UNDEF, G_CTLZ, G_CTTZ, G_BSWAP,
-                               G_SMULO, G_UMULO, G_SMULH, G_UMULH, G_UADDSAT,
-                               G_SADDSAT, G_USUBSAT, G_SSUBSAT})
+  getActionDefinitionsBuilder(
+      {G_ABS, G_DYN_STACKALLOC, G_SEXT_INREG, G_CTLZ_ZERO_UNDEF,
+       G_CTTZ_ZERO_UNDEF, G_CTLZ, G_CTTZ, G_BSWAP, G_SMULO, G_UMULO, G_SMULH,
+       G_UMULH, G_UADDSAT, G_SADDSAT, G_USUBSAT, G_SSUBSAT})
       .lower();
 
   getActionDefinitionsBuilder(G_CTPOP)

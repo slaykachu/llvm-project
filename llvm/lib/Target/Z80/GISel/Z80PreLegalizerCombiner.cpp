@@ -12,6 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "Z80.h"
+#include "MCTargetDesc/Z80MCTargetDesc.h"
+#include "Z80InstrInfo.h"
 #include "llvm/CodeGen/GlobalISel/Combiner.h"
 #include "llvm/CodeGen/GlobalISel/CombinerHelper.h"
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
@@ -83,6 +85,28 @@ static void applyCombineTruncShift(MachineInstr &MI, MachineIRBuilder &Builder,
                                    Register SrcReg) {
   Builder.setInstrAndDebugLoc(MI);
   Builder.buildExtract(MI.getOperand(0), SrcReg, 8);
+
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
+}
+
+static bool matchFlipSetCCCond(MachineInstr &MI, MachineRegisterInfo &MRI,
+                               MachineInstr *&SetCCMI) {
+  bool Imm;
+  return mi_match(MI.getOperand(0).getReg(), MRI,
+                  m_GXor(m_OneUse(m_MInstr(SetCCMI)), m_ICst(Imm))) &&
+         SetCCMI->getOpcode() == Z80::SetCC && Imm;
+}
+
+static void applyFlipSetCCCond(MachineInstr &MI, MachineIRBuilder &Builder,
+                               GISelChangeObserver &Observer,
+                               MachineInstr &SetCCMI) {
+  // Warning, SetCC has a physreg use, so don't create the SetCC at the G_XOR!
+  Observer.changingInstr(SetCCMI);
+  SetCCMI.getOperand(0).setReg(MI.getOperand(0).getReg());
+  MachineOperand &Cond = SetCCMI.getOperand(1);
+  Cond.setImm(Z80::GetOppositeBranchCondition(Z80::CondCode(Cond.getImm())));
+  Observer.changedInstr(SetCCMI);
 
   Observer.erasingInstr(MI);
   MI.eraseFromParent();

@@ -17,6 +17,7 @@
 #include "Z80RegisterBankInfo.h"
 #include "Z80Subtarget.h"
 #include "Z80TargetMachine.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelectorImpl.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
@@ -87,6 +88,8 @@ private:
   bool selectBrJT(MachineInstr &I, MachineRegisterInfo &MRI,
                   MachineFunction &MF) const;
   bool selectImplicitDefOrPHI(MachineInstr &I, MachineRegisterInfo &MRI) const;
+
+  bool selectInlineAsm(MachineInstr &I, MachineRegisterInfo &MRI) const;
 
   ComplexRendererFns selectMem(MachineOperand &Root) const;
   ComplexRendererFns selectOff(MachineOperand &Root) const;
@@ -290,6 +293,8 @@ bool Z80InstructionSelector::select(MachineInstr &I) const {
     switch (I.getOpcode()) {
     case TargetOpcode::COPY:
       return selectCopy(I, MRI);
+    case TargetOpcode::INLINEASM:
+      return selectInlineAsm(I, MRI);
     case Z80::SetCC:
       return selectSetCond(I, MRI);
     }
@@ -1146,6 +1151,15 @@ Z80InstructionSelector::foldCompare(MachineInstr &I, MachineIRBuilder &MIB,
         if (mi_match(LHSReg, MRI,
                      m_OneUse(m_GAnd(m_Reg(SrcReg), m_ICst(Mask)))) &&
             isPowerOf2_32(Mask)) {
+          //Register CondReg;
+          //if (Mask == 1 && mi_match(SrcReg, MRI, m_GAnyExt(m_Reg(CondReg))) &&
+          //    MRI.getType(CondReg) == LLT::scalar(1)) {
+          //  asm("int3");
+          //  Z80::CondCode FoldCC = foldCond(CondReg, MIB, MRI);
+          //  if (FoldCC != Z80::COND_INVALID) {
+          //    asm("int3");
+          //  }
+          //}
           Opc = Z80::BIT8bg;
           Reg = {};
           Ops = {uint64_t(findFirstSet(Mask)), SrcReg};
@@ -1273,12 +1287,22 @@ Z80::CondCode
 Z80InstructionSelector::foldSetCC(MachineInstr &I, MachineIRBuilder &MIB,
                                   MachineRegisterInfo &MRI) const {
   assert(I.getOpcode() == Z80::SetCC && "unexpected instruction");
-  auto CC = Z80::CondCode(I.getOperand(1).getImm());
 
-  if (I == MIB.getInsertPt())
-    return CC;
+  MachineBasicBlock &MBB = *I.getParent();
+  if (MIB.getInsertPt()->getParent() != &MBB)
+    return Z80::COND_INVALID;
 
-  return Z80::COND_INVALID;
+  for (MachineBasicBlock::iterator II = I, EI = MIB.getInsertPt(); II != EI; ++II) {
+    if (II == MBB.end())
+      return Z80::COND_INVALID;
+    switch (II->getOpcode()) {
+    case Z80::SetCC:
+      continue;
+    }
+    return Z80::COND_INVALID;
+  }
+
+  return Z80::CondCode(I.getOperand(1).getImm());
 }
 
 Z80::CondCode Z80InstructionSelector::foldCond(Register CondReg,
@@ -1539,6 +1563,22 @@ bool Z80InstructionSelector::selectImplicitDefOrPHI(
 
   Register DstReg = I.getOperand(0).getReg();
   return RBI.constrainGenericRegister(DstReg, *getRegClass(DstReg, MRI), MRI);
+}
+
+bool Z80InstructionSelector::selectInlineAsm(MachineInstr &I,
+                                             MachineRegisterInfo &MRI) const {
+  for (unsigned Idx :
+       llvm::seq<unsigned>(InlineAsm::MIOp_FirstOperand, I.getNumOperands())) {
+    MachineOperand &MO = I.getOperand(Idx);
+    if (!MO.isReg())
+      continue;
+    Register Reg = MO.getReg();
+    if (Reg == Z80::NoRegister || !Reg.isVirtual())
+      continue;
+    if (const auto *RC = I.getRegClassConstraint(Idx, &TII, &TRI))
+      MO.setReg(constrainOperandRegClass(*MF, TRI, MRI, TII, RBI, I, MO, Idx));
+  }
+  return true;
 }
 
 InstructionSelector::ComplexRendererFns

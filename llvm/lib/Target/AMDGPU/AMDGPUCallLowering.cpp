@@ -1253,9 +1253,8 @@ bool AMDGPUCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   // divergent call targets.
   if (MIB->getOperand(1).isReg()) {
     MIB->getOperand(1).setReg(constrainOperandRegClass(
-        MF, *TRI, MRI, *ST.getInstrInfo(),
-        *ST.getRegBankInfo(), *MIB, MIB->getDesc(), MIB->getOperand(1),
-        1));
+        MF, *TRI, MRI, *ST.getInstrInfo(), *ST.getRegBankInfo(), *MIB,
+        MIB->getOperand(1), 1));
   }
 
   auto OrigInsertPt = MIRBuilder.getInsertPt();
