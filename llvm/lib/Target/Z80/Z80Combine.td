@@ -11,13 +11,20 @@
 
 include "llvm/Target/GlobalISel/Combine.td"
 
+def combine_trunc_shift_matchdata : GIDefMatchData<"Register">;
+def combine_trunc_shift : GICombineRule<
+  (defs root:$mi, combine_trunc_shift_matchdata:$matchinfo),
+  (match (wip_match_opcode G_TRUNC):$mi,
+         [{ return matchCombineTruncShift(*${mi}, MRI, ${matchinfo}); }]),
+  (apply [{ applyCombineTruncShift(*${mi}, B, Observer, ${matchinfo}); }])>;
+
 def Z80PreLegalizerCombinerHelper
     : GICombinerHelper<"Z80GenPreLegalizerCombinerHelper", [
       trivial_combines, elide_br_by_inverting_cond, ptr_add_immed_chain,
       ptr_add_global_immed, ptr_add_const_immed, sext_to_zext, or_to_add,
       funnel_shift, combine_identity, combine_ext_or_trunc, narrow_op,
-      narrow_compare, split_conditions, flip_condition, lower_is_power_of_two,
-      sink_const, undef_combines
+      narrow_compare, split_conditions, combine_trunc_shift, flip_condition,
+      lower_is_power_of_two, sink_const, undef_combines
     ]> {
   let DisableRuleOption = "z80prelegalizercombiner-disable-rule";
 }
