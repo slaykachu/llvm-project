@@ -150,11 +150,11 @@ Z80InstructionSelector::getRegClass(Register Reg,
   const RegisterBank &RB = *RBI.getRegBank(Reg, MRI, TRI);
   const LLT Ty = MRI.getType(Reg);
   if (RB.getID() == Z80::GPRRegBankID) {
-    if (Ty.getSizeInBits() <= 8)
+    if (Ty == LLT::scalar(8) || Ty == LLT::scalar(1))
       return &Z80::R8RegClass;
-    if (Ty.getSizeInBits() == 16)
+    if (Ty == LLT::scalar(16) || Ty == LLT::pointer(0, 16))
       return &Z80::R16RegClass;
-    if (Ty.getSizeInBits() == 24)
+    if (Ty == LLT::scalar(24) || Ty == LLT::pointer(0, 24))
       return &Z80::R24RegClass;
   }
 
@@ -382,17 +382,7 @@ bool Z80InstructionSelector::selectTrunc(MachineInstr &I,
   if (!DstRC || !SrcRC)
     return false;
 
-  unsigned SubIdx;
-  if (DstRC == SrcRC)
-    // Nothing to be done
-    SubIdx = Z80::NoSubRegister;
-  else if (DstRC == &Z80::R8RegClass)
-    SubIdx = Z80::sub_low;
-  else if (DstRC == &Z80::R16RegClass)
-    SubIdx = Z80::sub_short;
-  else
-    return false;
-
+  unsigned SubIdx = getSubRegIndex(DstRC);
   SrcRC = TRI.getSubClassWithSubReg(SrcRC, SubIdx);
 
   if (!RBI.constrainGenericRegister(SrcReg, *SrcRC, MRI) ||

@@ -53,6 +53,8 @@ private:
                                                       MachineInstr &MI) const;
   LegalizerHelper::LegalizeResult legalizeCompare(LegalizerHelper &Helper,
                                                   MachineInstr &MI) const;
+  LegalizerHelper::LegalizeResult legalizeMemIntrinsic(LegalizerHelper &Helper,
+                                                       MachineInstr &MI) const;
 };
 
 } // End namespace llvm

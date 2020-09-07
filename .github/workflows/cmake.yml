@@ -76,7 +76,9 @@ jobs:
         run: cmake --build build --config ${{matrix.build-type}}
 
       - name: Install LLVM
-        run: cmake --build build --config ${{matrix.build-type}} --target install
+        run: |
+          cmake --build build --config ${{matrix.build-type}} --target install
+          cmake -E copy build/include/llvm/Config/config.h llvm/include/llvm/Config
       - name: Upload LLVM
         uses: actions/upload-artifact@v2
         with:

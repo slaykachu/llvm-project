@@ -2817,7 +2817,7 @@ bool CombinerHelper::matchNarrowICmp(MachineInstr &MI, TypeImmPair &MatchInfo) {
     if (Width >= Ty.getSizeInBits() ||
         !isLegalOrBeforeLegalizer({TargetOpcode::G_ICMP, {LLT::scalar(Width)}}))
       return false;
-    for (MatchInfo.Imm = 0; MatchInfo.Imm < Ty.getSizeInBits();
+    for (MatchInfo.Imm = 0; MatchInfo.Imm + Width < Ty.getSizeInBits();
          MatchInfo.Imm += Width) {
       if ((KnownEqual | APInt::getBitsSet(Ty.getSizeInBits(), MatchInfo.Imm,
                                           MatchInfo.Imm + Width))
