@@ -464,6 +464,13 @@ def narrow_op : GICombineRule<
          [{ return Helper.matchNarrowOp(*${mi}); }]),
   (apply [{ Helper.applyNarrowOp(*${mi}); }])>;
 
+def narrow_load_matchdata : GIDefMatchData<"InstrImmPair">;
+def narrow_load : GICombineRule<
+  (defs root:$mi, narrow_load_matchdata:$matchinfo),
+  (match (wip_match_opcode G_TRUNC):$mi,
+         [{ return Helper.matchNarrowLoad(*${mi}, ${matchinfo}); }]),
+  (apply [{ Helper.applyNarrowLoad(*${mi}, ${matchinfo}); }])>;
+
 def narrow_compare_matchdata : GIDefMatchData<"unsigned">;
 def narrow_compare : GICombineRule<
   (defs root:$mi, narrow_compare_matchdata:$matchinfo),

@@ -84,6 +84,11 @@ struct RegisterImmPair {
   int64_t Imm;
 };
 
+struct InstrImmPair {
+  MachineInstr *MI;
+  int64_t Imm;
+};
+
 using OperandBuildSteps =
     SmallVector<std::function<void(MachineInstrBuilder &)>, 4>;
 struct InstructionBuildSteps {
@@ -403,6 +408,9 @@ public:
 
   bool matchNarrowOp(MachineInstr &MI);
   void applyNarrowOp(MachineInstr &MI);
+
+  bool matchNarrowLoad(MachineInstr &MI, InstrImmPair &MatchInfo);
+  void applyNarrowLoad(MachineInstr &MI, const InstrImmPair &MatchInfo);
 
   bool matchNarrowCompare(MachineInstr &MI, unsigned &ShiftAmt);
   void applyNarrowCompare(MachineInstr &MI, unsigned ShiftAmt);

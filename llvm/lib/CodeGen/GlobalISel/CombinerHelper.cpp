@@ -2688,7 +2688,6 @@ bool CombinerHelper::matchNarrowOp(MachineInstr &MI) {
   if (!TLI.isTypeDesirableForGOp(Opc, NarrowTy))
     return false;
 
-  const auto &DL = MF.getDataLayout();
   switch (Opc) {
   case TargetOpcode::G_ADD:
   case TargetOpcode::G_SUB:
@@ -2697,13 +2696,6 @@ bool CombinerHelper::matchNarrowOp(MachineInstr &MI) {
   case TargetOpcode::G_OR:
   case TargetOpcode::G_XOR:
     return isLegalOrBeforeLegalizer({Opc, {NarrowTy, NarrowTy}});
-  case TargetOpcode::G_LOAD:
-  case TargetOpcode::G_SEXTLOAD:
-  case TargetOpcode::G_ZEXTLOAD:
-    return isLegalOrBeforeLegalizer(
-        {Opc, {NarrowTy, LLT::pointer(0, DL.getPointerSizeInBits(0))}});
-  case TargetOpcode::G_CONSTANT:
-    return isLegalOrBeforeLegalizer({Opc, {NarrowTy}});
   default:
     return false;
   }
@@ -2723,22 +2715,54 @@ void CombinerHelper::applyNarrowOp(MachineInstr &MI) {
   Builder.setInstr(OpMI);
   Observer.changingInstr(OpMI);
   OpMI.getOperand(0).setReg(TruncReg);
-  if (OpMI.mayLoad()) {
-    assert(OpMI.hasOneMemOperand() &&
-           "Expected generic load to have exactly one MMO.");
-    MachineFunction &MF = Builder.getMF();
-    OpMI.setMemRefs(MF, MF.getMachineMemOperand(*OpMI.memoperands_begin(), 0,
-                                                NarrowTy.getSizeInBytes()));
-  } else if (OpMI.getOpcode() == TargetOpcode::G_CONSTANT) {
-    MachineOperand &MO = OpMI.getOperand(1);
-    const ConstantInt *Val = MO.getCImm();
-    MO.setCImm(ConstantInt::get(
-        Val->getContext(), Val->getValue().trunc(NarrowTy.getSizeInBits())));
-  } else
-    for (auto &MO : OpMI.explicit_uses())
-      if (MO.isReg())
-        MO.setReg(Builder.buildTrunc(NarrowTy, MO.getReg()).getReg(0));
+  for (auto &MO : OpMI.explicit_uses())
+    MO.setReg(Builder.buildTrunc(NarrowTy, MO.getReg()).getReg(0));
   Observer.changedInstr(OpMI);
+}
+
+bool CombinerHelper::matchNarrowLoad(MachineInstr &MI,
+                                     InstrImmPair &MatchInfo) {
+  Register DstReg = MI.getOperand(0).getReg();
+  LLT DstTy = MRI.getType(DstReg);
+  if (!DstTy.isScalar())
+    return false;
+  unsigned DstSize = DstTy.getSizeInBits();
+
+  MatchInfo.Imm = 0;
+  if (!mi_match(
+          DstReg, MRI,
+          m_GTrunc(m_OneUse(m_any_of(
+              m_GLShr(m_OneUse(m_MInstr(MatchInfo.MI)), m_ICst(MatchInfo.Imm)),
+              m_GAShr(m_OneUse(m_MInstr(MatchInfo.MI)), m_ICst(MatchInfo.Imm)),
+              m_MInstr(MatchInfo.MI))))) ||
+      MatchInfo.Imm & 7)
+    return false;
+
+  unsigned LoadOpc = MatchInfo.MI->getOpcode();
+  if (LoadOpc != TargetOpcode::G_LOAD &&
+      LoadOpc != TargetOpcode::G_SEXTLOAD &&
+      LoadOpc != TargetOpcode::G_ZEXTLOAD)
+    return false;
+
+  assert(MatchInfo.MI->hasOneMemOperand() &&
+         "Expected generic load to have exactly one MMO.");
+  const auto *MMO = MatchInfo.MI->memoperands().front();
+  LLT AddrTy = MRI.getType(MatchInfo.MI->getOperand(1).getReg());
+  return !MMO->isVolatile() && !MMO->isAtomic() &&
+         MMO->getSizeInBits() >= DstSize &&
+         MatchInfo.Imm <= int64_t(MMO->getSizeInBits() - DstSize) &&
+         isLegalOrBeforeLegalizer({TargetOpcode::G_LOAD, {DstTy, AddrTy}});
+}
+
+void CombinerHelper::applyNarrowLoad(MachineInstr &MI,
+                                     const InstrImmPair &MatchInfo) {
+  Builder.setInstrAndDebugLoc(*MatchInfo.MI);
+  Builder.buildLoadFromOffset(MI.getOperand(0), MatchInfo.MI->getOperand(1),
+                              *MatchInfo.MI->memoperands().front(),
+                              MatchInfo.Imm >> 3);
+
+  Observer.erasingInstr(MI);
+  MI.eraseFromParent();
 }
 
 bool CombinerHelper::matchNarrowCompare(MachineInstr &MI, unsigned &ShiftAmt) {
