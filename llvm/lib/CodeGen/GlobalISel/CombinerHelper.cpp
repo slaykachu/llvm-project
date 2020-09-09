@@ -2038,6 +2038,14 @@ bool CombinerHelper::replaceInstWithConstant(MachineInstr &MI, int64_t C) {
   return true;
 }
 
+bool CombinerHelper::replaceInstWithConstant(MachineInstr &MI, APInt C) {
+  assert(MI.getNumDefs() == 1 && "Expected only one def?");
+  Builder.setInstr(MI);
+  Builder.buildConstant(MI.getOperand(0), C);
+  MI.eraseFromParent();
+  return true;
+}
+
 bool CombinerHelper::replaceInstWithUndef(MachineInstr &MI) {
   assert(MI.getNumDefs() == 1 && "Expected only one def?");
   Builder.setInstr(MI);
@@ -3031,6 +3039,16 @@ void CombinerHelper::applyLowerIsPowerOfTwo(MachineInstr &MI) {
 
   Observer.erasingInstr(MI);
   MI.eraseFromParent();
+}
+
+bool CombinerHelper::matchKnownConstant(MachineInstr &MI, APInt &C) {
+  if (!KB)
+    return false;
+  KnownBits Known = KB->getKnownBits(MI.getOperand(0).getReg());
+  if (!Known.isConstant())
+    return false;
+  C = Known.getConstant();
+  return true;
 }
 
 bool CombinerHelper::matchSinkConstant(MachineInstr &MI,
