@@ -92,6 +92,9 @@ public:
   ///   in clang that depend on specific version of the CUDA SDK.
   llvm::VersionTuple SDKVersion;
 
+  /// Force mangle main to __main_argc_argv if it has arguments.
+  bool ForceMangleMainArgcArgv;
+
   /// Very specific hack for testing the ez80 backend.
   bool TestEZ80Hack;
 };

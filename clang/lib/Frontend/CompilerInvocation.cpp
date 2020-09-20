@@ -3000,6 +3000,7 @@ static void ParseTargetArgs(TargetOptions &Opts, ArgList &Args,
     else
       Opts.SDKVersion = Version;
   }
+  Opts.ForceMangleMainArgcArgv = Args.hasArg(OPT_fforce_mangle_main_argc_argv);
   Opts.TestEZ80Hack = Args.hasArg(OPT_test_ez80_hack);
 }
 
