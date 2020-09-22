@@ -39,6 +39,7 @@ class AsmPrinter;
 class DIE;
 class DIEUnit;
 class DwarfCompileUnit;
+class MCContext;
 class MCExpr;
 class MCSection;
 class MCSymbol;
@@ -133,6 +134,8 @@ public:
 /// finds. The resulting collection of DIEAbbrev objects can then be emitted
 /// into the .debug_abbrev section.
 class DIEAbbrevSet {
+  /// A label at the beginning of the .debug_abbrev section.
+  MCSymbol *Label = nullptr;
   /// The bump allocator to use when creating DIEAbbrev objects in the uniqued
   /// storage container.
   BumpPtrAllocator &Alloc;
@@ -144,6 +147,10 @@ class DIEAbbrevSet {
 public:
   DIEAbbrevSet(BumpPtrAllocator &A) : Alloc(A) {}
   ~DIEAbbrevSet();
+
+  MCSymbol *getLabel() const { return Label; }
+
+  void createLabel(MCContext &Context);
 
   /// Generate the abbreviation declaration for a DIE and return a pointer to
   /// the generated abbreviation.

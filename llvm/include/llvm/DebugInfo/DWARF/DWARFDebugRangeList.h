@@ -11,6 +11,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFAddressRange.h"
 #include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
+#include "llvm/Support/MathExtras.h"
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -50,10 +51,7 @@ public:
     /// use in interpreting the beginning and ending address offsets of
     /// subsequent entries of the location list.
     bool isBaseAddressSelectionEntry(uint8_t AddressSize) const {
-      assert(AddressSize == 4 || AddressSize == 8);
-      if (AddressSize == 4)
-        return StartAddress == -1U;
-      return StartAddress == -1ULL;
+      return StartAddress == maxUIntN(8 * AddressSize);
     }
   };
 

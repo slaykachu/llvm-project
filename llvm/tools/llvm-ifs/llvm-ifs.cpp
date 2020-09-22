@@ -295,6 +295,7 @@ static int writeElfStub(const Triple &T, const std::vector<IFSSymbol> &Symbols,
             .Case("ppc64le", "EM_PPC64")
             .Case("x86", T.isOSIAMCU() ? "EM_IAMCU" : "EM_386")
             .Case("x86_64", "EM_X86_64")
+            .Cases("z80", "ez80", "EM_Z80")
             .Default("EM_NONE")
      << "\nSections:"
      << "\n  - Name:            .text"

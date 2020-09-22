@@ -143,8 +143,11 @@ DIEAbbrevSet::~DIEAbbrevSet() {
     Abbrev->~DIEAbbrev();
 }
 
-DIEAbbrev &DIEAbbrevSet::uniqueAbbreviation(DIE &Die) {
+void DIEAbbrevSet::createLabel(MCContext &Context) {
+  Label = Context.createTempSymbol("abbrev_start", true);
+}
 
+DIEAbbrev &DIEAbbrevSet::uniqueAbbreviation(DIE &Die) {
   FoldingSetNodeID ID;
   DIEAbbrev Abbrev = Die.generateAbbrev();
   Abbrev.Profile(ID);
@@ -171,6 +174,8 @@ void DIEAbbrevSet::Emit(const AsmPrinter *AP, MCSection *Section) const {
   if (!Abbreviations.empty()) {
     // Start the debug abbrev section.
     AP->OutStreamer->SwitchSection(Section);
+    if (Label)
+      AP->OutStreamer->emitLabel(Label);
     AP->emitDwarfAbbrevs(Abbreviations);
   }
 }
@@ -277,6 +282,8 @@ LLVM_DUMP_METHOD void DIE::dump() const {
 unsigned DIE::computeOffsetsAndAbbrevs(const AsmPrinter *AP,
                                        DIEAbbrevSet &AbbrevSet,
                                        unsigned CUOffset) {
+  AbbrevSet.createLabel(AP->OutContext);
+
   // Unique the abbreviation and fill in the abbreviation number so this DIE
   // can be emitted.
   const DIEAbbrev &Abbrev = AbbrevSet.uniqueAbbreviation(*this);

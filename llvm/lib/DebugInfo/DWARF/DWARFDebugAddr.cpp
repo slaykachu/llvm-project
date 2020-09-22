@@ -18,11 +18,11 @@ Error DWARFDebugAddrTable::extractAddresses(const DWARFDataExtractor &Data,
   assert(EndOffset >= *OffsetPtr);
   uint64_t DataSize = EndOffset - *OffsetPtr;
   assert(Data.isValidOffsetForDataOfSize(*OffsetPtr, DataSize));
-  if (AddrSize != 4 && AddrSize != 8)
+  if (AddrSize < 1 || AddrSize > 8)
     return createStringError(errc::not_supported,
                              "address table at offset 0x%" PRIx64
                              " has unsupported address size %" PRIu8
-                             " (4 and 8 are supported)",
+                             " (1-8 are supported)",
                              Offset, AddrSize);
   if (DataSize % AddrSize != 0) {
     invalidateLength();
@@ -148,11 +148,9 @@ void DWARFDebugAddrTable::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
   }
 
   if (Addrs.size() > 0) {
-    const char *AddrFmt =
-        (AddrSize == 4) ? "0x%8.8" PRIx64 "\n" : "0x%16.16" PRIx64 "\n";
     OS << "Addrs: [\n";
     for (uint64_t Addr : Addrs)
-      OS << format(AddrFmt, Addr);
+      OS << format("0x%0*" PRIx64 "\n", 2 * AddrSize, Addr);
     OS << "]\n";
   }
 }

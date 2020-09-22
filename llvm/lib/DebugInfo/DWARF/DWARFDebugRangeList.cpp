@@ -30,7 +30,7 @@ Error DWARFDebugRangeList::extract(const DWARFDataExtractor &data,
                        "invalid range list offset 0x%" PRIx64, *offset_ptr);
 
   AddressSize = data.getAddressSize();
-  if (AddressSize != 4 && AddressSize != 8)
+  if (AddressSize < 1 || AddressSize > 8)
     return createStringError(errc::invalid_argument,
                        "invalid address size: %" PRIu8, AddressSize);
   Offset = *offset_ptr;
@@ -58,12 +58,10 @@ Error DWARFDebugRangeList::extract(const DWARFDataExtractor &data,
 }
 
 void DWARFDebugRangeList::dump(raw_ostream &OS) const {
-  for (const RangeListEntry &RLE : Entries) {
-    const char *format_str =
-        (AddressSize == 4 ? "%08" PRIx64 " %08" PRIx64 " %08" PRIx64 "\n"
-                          : "%08" PRIx64 " %016" PRIx64 " %016" PRIx64 "\n");
-    OS << format(format_str, Offset, RLE.StartAddress, RLE.EndAddress);
-  }
+  for (const RangeListEntry &RLE : Entries)
+    OS << format("%08" PRIx64 " %0*" PRIx64 " %0*" PRIx64 "\n", Offset,
+                 2 * AddressSize, RLE.StartAddress, 2 * AddressSize,
+                 RLE.EndAddress);
   OS << format("%08" PRIx64 " <End of list>\n", Offset);
 }
 

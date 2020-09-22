@@ -369,7 +369,8 @@ public:
   }
 
   static bool isAddressSizeSupported(unsigned AddressSize) {
-    return AddressSize == 2 || AddressSize == 4 || AddressSize == 8;
+    return AddressSize == 2 || AddressSize == 3 || AddressSize == 4 ||
+           AddressSize == 8;
   }
 
   std::shared_ptr<DWARFContext> getDWOContext(StringRef AbsolutePath);

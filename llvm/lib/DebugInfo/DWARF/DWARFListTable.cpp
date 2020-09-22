@@ -54,7 +54,8 @@ Error DWARFListTableHeader::extract(DWARFDataExtractor Data,
                        "unrecognised %s table version %" PRIu16
                        " in table at offset 0x%" PRIx64,
                        SectionName.data(), HeaderData.Version, HeaderOffset);
-  if (HeaderData.AddrSize != 4 && HeaderData.AddrSize != 8)
+  if (HeaderData.AddrSize != 3 && HeaderData.AddrSize != 4 &&
+      HeaderData.AddrSize != 8)
     return createStringError(errc::not_supported,
                        "%s table at offset 0x%" PRIx64
                        " has unsupported address size %" PRIu8,

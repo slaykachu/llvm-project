@@ -1514,6 +1514,7 @@ static const EnumEntry<unsigned> ElfMachineType[] = {
   ENUM_ENT(EM_LANAI,         "EM_LANAI"),
   ENUM_ENT(EM_BPF,           "EM_BPF"),
   ENUM_ENT(EM_VE,            "NEC SX-Aurora Vector Engine"),
+  ENUM_ENT(EM_Z80,           "Zilog Z80"),
 };
 
 static const EnumEntry<unsigned> ElfSymbolBindings[] = {
@@ -1833,6 +1834,10 @@ static const EnumEntry<unsigned> ElfHeaderRISCVFlags[] = {
   ENUM_ENT(EF_RISCV_FLOAT_ABI_DOUBLE, "double-float ABI"),
   ENUM_ENT(EF_RISCV_FLOAT_ABI_QUAD, "quad-float ABI"),
   ENUM_ENT(EF_RISCV_RVE, "RVE")
+};
+
+static const EnumEntry<unsigned> ElfHeaderZ80Flags[] = {
+  ENUM_ENT(EF_Z80_EZ80, "eZ80")
 };
 
 static const EnumEntry<unsigned> ElfSymOtherFlags[] = {
@@ -3571,6 +3576,8 @@ template <class ELFT> void GNUStyle<ELFT>::printFileHeaders() {
                    unsigned(ELF::EF_MIPS_MACH));
   else if (e.e_machine == EM_RISCV)
     ElfFlags = printFlags(e.e_flags, makeArrayRef(ElfHeaderRISCVFlags));
+  else if (e.e_machine == EM_Z80)
+    ElfFlags = printFlags(e.e_flags, makeArrayRef(ElfHeaderZ80Flags));
   Str = "0x" + to_hexString(e.e_flags);
   if (!ElfFlags.empty())
     Str = Str + ", " + ElfFlags;
@@ -6358,6 +6365,8 @@ template <class ELFT> void LLVMStyle<ELFT>::printFileHeaders() {
                    unsigned(ELF::EF_AMDGPU_MACH));
     else if (E.e_machine == EM_RISCV)
       W.printFlags("Flags", E.e_flags, makeArrayRef(ElfHeaderRISCVFlags));
+    else if (E.e_machine == EM_Z80)
+      W.printFlags("Flags", E.e_flags, makeArrayRef(ElfHeaderZ80Flags));
     else
       W.printFlags("Flags", E.e_flags);
     W.printNumber("HeaderSize", E.e_ehsize);
