@@ -983,6 +983,7 @@ public:
   virtual void emitCFIDefCfaOffset(int64_t Offset);
   virtual void emitCFIDefCfaRegister(int64_t Register);
   virtual void emitCFIOffset(int64_t Register, int64_t Offset);
+  virtual void emitCFIValOffset(int64_t Register, int64_t Offset);
   virtual void emitCFIPersonality(const MCSymbol *Sym, unsigned Encoding);
   virtual void emitCFILsda(const MCSymbol *Sym, unsigned Encoding);
   virtual void emitCFIRememberState();

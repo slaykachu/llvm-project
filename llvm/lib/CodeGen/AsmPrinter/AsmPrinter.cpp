@@ -1025,12 +1025,7 @@ bool AsmPrinter::needsSEHMoves() {
 }
 
 void AsmPrinter::emitCFIInstruction(const MachineInstr &MI) {
-  ExceptionHandling ExceptionHandlingType = MAI->getExceptionHandlingType();
-  if (ExceptionHandlingType != ExceptionHandling::DwarfCFI &&
-      ExceptionHandlingType != ExceptionHandling::ARM)
-    return;
-
-  if (needsCFIMoves() == CFI_M_None)
+  if (!MAI->usesCFIForEH() || needsCFIMoves() == CFI_M_None)
     return;
 
   // If there is no "real" instruction following this CFI instruction, skip
